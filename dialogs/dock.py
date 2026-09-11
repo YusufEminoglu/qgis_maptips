@@ -430,19 +430,31 @@ class QgisMapTipsDock(QDockWidget):
 
         info = QLabel(
             "Live Canvas HUD enables non-blocking pixel value inspection when hovering over "
-            "raster layers (DEM, Slope, NDVI, Orthophoto) with debounced sampling and composite "
-            "vector+raster multi-layer inspection."
+            "raster layers (DEM, Slope, NDVI, Orthophoto) with debounced sampling, custom reticle cursor, "
+            "and composite vector+raster multi-layer inspection."
         )
         info.setWordWrap(True)
         info.setStyleSheet("font-size: 8.5pt; color: #475569;")
         layout.addWidget(info)
 
-        grp_hud = QGroupBox("HUD Settings")
+        grp_hud = QGroupBox("HUD Inspection Controls")
         form_hud = QFormLayout(grp_hud)
 
         self.hud_enable_cb = QCheckBox("Enable Live Canvas Hover HUD")
         self.hud_enable_cb.toggled.connect(self._toggle_hud)
         form_hud.addRow("", self.hud_enable_cb)
+
+        self.hud_cursor_cb = QCheckBox("Use Precision Reticle Cursor on Canvas")
+        self.hud_cursor_cb.setChecked(True)
+        self.hud_cursor_cb.setToolTip("Replaces the default hand cursor with an inspection crosshair & locator badge")
+        self.hud_cursor_cb.toggled.connect(lambda c: self._hud.set_use_custom_cursor(c))
+        form_hud.addRow("", self.hud_cursor_cb)
+
+        self.hud_pin_cb = QCheckBox("📌 Pin / Freeze Tooltip (Shift+Click canvas to toggle)")
+        self.hud_pin_cb.setToolTip("Freezes current tooltip stationary on canvas so it will not close or move")
+        self.hud_pin_cb.toggled.connect(lambda c: self._hud.set_pinned(c))
+        self._hud.pinStateChanged.connect(self.hud_pin_cb.setChecked)
+        form_hud.addRow("", self.hud_pin_cb)
 
         self.hud_composite_cb = QCheckBox("Composite Mode (Inspect All Visible Rasters + Top Vector)")
         self.hud_composite_cb.toggled.connect(self._on_hud_composite_toggled)
@@ -460,6 +472,24 @@ class QgisMapTipsDock(QDockWidget):
         form_hud.addRow("Dwell Debounce:", self.hud_debounce_spin)
 
         layout.addWidget(grp_hud)
+
+        # Live Inspected Values in Dock (Permanent View)
+        grp_feed = QGroupBox("Live Sampled Values Feed (Permanent View)")
+        feed_layout = QVBoxLayout(grp_feed)
+        self.hud_live_browser = QTextBrowser()
+        self.hud_live_browser.setMinimumHeight(140)
+        self.hud_live_browser.setStyleSheet(
+            "background-color: #0f172a; color: #f8fafc; border-radius: 4px; border: 1px solid #334155;"
+        )
+        self.hud_live_browser.setHtml(
+            "<div style='color:#64748b; font-size:9pt; padding:10px;'>"
+            "Hover over the map canvas to inspect raster bands and vector features. "
+            "Values remain permanently visible here even after moving the mouse away.</div>"
+        )
+        feed_layout.addWidget(self.hud_live_browser)
+        self._hud.sampleUpdated.connect(lambda html_val, _: self.hud_live_browser.setHtml(html_val))
+        layout.addWidget(grp_feed)
+
         layout.addStretch()
 
     # ──────────────────────────────────────────────────────────────────────────
