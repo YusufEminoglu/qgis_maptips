@@ -1,4 +1,4 @@
-"""Palette-aware styling for the 02Maptips studio dock.
+"""Palette-aware styling for the Qgis Advanced Map Tips&Actions studio dock.
 
 Derives surfaces, cards, borders, and typography from the active Qt palette
 to guarantee optimal readability across QGIS light, dark, and high-contrast themes.
@@ -80,7 +80,7 @@ def dock_color_tokens(palette: QPalette | None = None) -> dict[str, str]:
 
 
 def dock_stylesheet(palette: QPalette | None = None) -> str:
-    """Generate dynamic stylesheet for the 02Maptips dock."""
+    """Generate dynamic stylesheet for the Qgis MapTips dock."""
     t = dock_color_tokens(palette)
     return f"""
 QWidget#maptipsRoot {{

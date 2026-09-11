@@ -7,10 +7,11 @@ from qgis.PyQt.QtGui import QIcon
 from qgis.core import QgsProcessingProvider
 
 from .enhance_all_layers import EnhanceAllLayersAlgorithm
+from .export_layer_cards_report import ExportLayerCardsReportAlgorithm
 
 
 class QgisMapTipsProvider(QgsProcessingProvider):
-    """Exposes 02Maptips algorithms to the QGIS Processing Toolbox."""
+    """Exposes Qgis Advanced Map Tips&Actions algorithms to the QGIS Processing Toolbox."""
 
     PROVIDER_ID = "qgis_maptips"
 
@@ -26,3 +27,4 @@ class QgisMapTipsProvider(QgsProcessingProvider):
 
     def loadAlgorithms(self) -> None:
         self.addAlgorithm(EnhanceAllLayersAlgorithm())
+        self.addAlgorithm(ExportLayerCardsReportAlgorithm())

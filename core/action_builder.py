@@ -25,7 +25,7 @@ CLIPBOARD_PYTHON_CODE = (
     "lines = [f'{field.name()}: {feat[field.name()]}' for field in layer.fields()] if feat else []; "
     "QApplication.clipboard().setText('\\n'.join(lines)); "
     "from qgis.utils import iface; "
-    "iface.messageBar().pushInfo('02Maptips', 'Attributes copied to clipboard.') if hasattr(iface, 'messageBar') else None"
+    "iface.messageBar().pushInfo('Qgis MapTips', 'Attributes copied to clipboard.') if hasattr(iface, 'messageBar') else None"
 )
 
 # 1-Click HTML Card Report Opener
@@ -144,7 +144,7 @@ def build_select_intersecting_action(target_layer_name: str) -> dict[str, str]:
         f"    ids = [f.id() for f in tgt.getFeatures() if f.geometry().intersects(feat.geometry())]; "
         f"    tgt.selectByIds(ids); "
         f"    from qgis.utils import iface; "
-        f"    iface.messageBar().pushInfo('02Maptips', f'Selected {{len(ids)}} intersecting features in {clean_tgt}.') if hasattr(iface, 'messageBar') else None"
+        f"    iface.messageBar().pushInfo('Qgis MapTips', f'Selected {{len(ids)}} intersecting features in {clean_tgt}.') if hasattr(iface, 'messageBar') else None"
     )
     return {
         "key": f"select_intersects_{clean_tgt}",

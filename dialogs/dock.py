@@ -7,8 +7,9 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
-from qgis.PyQt.QtCore import Qt
+from qgis.PyQt.QtCore import Qt, QTimer
 from qgis.PyQt.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
     QDockWidget,
@@ -22,6 +23,7 @@ from qgis.PyQt.QtWidgets import (
     QListWidget,
     QListWidgetItem,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -70,6 +72,12 @@ class QgisMapTipsDock(QDockWidget):
         self._init_ui()
         apply_adaptive_theme(self)
 
+        # Sync and connect native MapTips action
+        self._sync_maptip_action_state()
+        if hasattr(self.iface, "actionMapTips") and self.iface.actionMapTips():
+            with contextlib.suppress(Exception):
+                self.iface.actionMapTips().toggled.connect(self._sync_maptip_action_state)
+
         # Connect layer signals
         QgsProject.instance().layersAdded.connect(self._refresh_layers)
         QgsProject.instance().layersRemoved.connect(self._refresh_layers)
@@ -94,10 +102,20 @@ class QgisMapTipsDock(QDockWidget):
         top_row = QHBoxLayout()
         title = QLabel("Qgis Advanced Map Tips&Actions")
         title.setObjectName("heroTitle")
+
+        self.toggle_maptips_btn = QPushButton("💡 MapTips: --")
+        self.toggle_maptips_btn.setCheckable(True)
+        self.toggle_maptips_btn.setToolTip("Quickly toggle QGIS Canvas MapTips visibility on or off")
+        self.toggle_maptips_btn.setStyleSheet(
+            "font-size: 8pt; font-weight: bold; background-color: #64748b; color: white; border-radius: 4px; padding: 2px 8px;"
+        )
+        self.toggle_maptips_btn.clicked.connect(self._toggle_canvas_maptips)
+
         badge = QLabel("PRO")
         badge.setObjectName("heroBadge")
         top_row.addWidget(title)
         top_row.addStretch()
+        top_row.addWidget(self.toggle_maptips_btn)
         top_row.addWidget(badge)
         hero_layout.addLayout(top_row)
 
@@ -308,12 +326,35 @@ class QgisMapTipsDock(QDockWidget):
         scroll_layout.addWidget(grp_attrs)
 
         # Live Preview Group
-        grp_preview = QGroupBox("Live Preview (Sample Feature)")
+        grp_preview = QGroupBox("Live Preview & Expression Code")
         prev_layout = QVBoxLayout(grp_preview)
+
+        self.preview_tabs = QTabWidget()
         self.preview_box = QTextBrowser()
         self.preview_box.setObjectName("previewBox")
         self.preview_box.setMinimumHeight(180)
-        prev_layout.addWidget(self.preview_box)
+        self.preview_tabs.addTab(self.preview_box, "Rendered Card")
+
+        self.expr_box = QPlainTextEdit()
+        self.expr_box.setReadOnly(True)
+        self.expr_box.setMinimumHeight(180)
+        self.expr_box.setStyleSheet(
+            "font-family: Consolas, 'Courier New', monospace; font-size: 8pt; background-color: #0f172a; color: #38bdf8; border-radius: 4px; padding: 4px;"
+        )
+        self.preview_tabs.addTab(self.expr_box, "Expression Code")
+        prev_layout.addWidget(self.preview_tabs)
+
+        prev_btn_row = QHBoxLayout()
+        self.copy_html_btn = QPushButton("📋 Copy HTML / Expression")
+        self.copy_html_btn.setToolTip("Copy the compiled MapTip HTML expression to the clipboard")
+        self.copy_html_btn.clicked.connect(self._copy_html_to_clipboard)
+        self.preview_status_lbl = QLabel("")
+        self.preview_status_lbl.setStyleSheet("font-size: 8pt; color: #10b981; font-weight: bold;")
+        prev_btn_row.addWidget(self.copy_html_btn)
+        prev_btn_row.addWidget(self.preview_status_lbl)
+        prev_btn_row.addStretch()
+        prev_layout.addLayout(prev_btn_row)
+
         scroll_layout.addWidget(grp_preview)
 
         scroll.setWidget(scroll_widget)
@@ -606,6 +647,9 @@ class QgisMapTipsDock(QDockWidget):
     def _update_preview(self) -> None:
         config = self._build_config_from_ui()
         raw_html = compile_maptip_html(config)
+        self._current_raw_html = raw_html
+        if hasattr(self, "expr_box"):
+            self.expr_box.setPlainText(raw_html)
 
         if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
             sample_feature = None
@@ -627,9 +671,45 @@ class QgisMapTipsDock(QDockWidget):
 
         self.preview_box.setHtml(raw_html)
 
+    def _copy_html_to_clipboard(self) -> None:
+        text = getattr(self, "_current_raw_html", "")
+        if not text:
+            config = self._build_config_from_ui()
+            text = compile_maptip_html(config)
+            self._current_raw_html = text
+        QApplication.clipboard().setText(text)
+        if hasattr(self, "preview_status_lbl"):
+            self.preview_status_lbl.setText("Copied!")
+            QTimer.singleShot(2500, lambda: self.preview_status_lbl.setText(""))
+
+    def _toggle_canvas_maptips(self) -> None:
+        if hasattr(self.iface, "actionMapTips") and self.iface.actionMapTips():
+            self.iface.actionMapTips().trigger()
+            self._sync_maptip_action_state()
+
+    def _sync_maptip_action_state(self, checked: Optional[bool] = None) -> None:
+        if not hasattr(self, "toggle_maptips_btn"):
+            return
+        if not hasattr(self.iface, "actionMapTips") or not self.iface.actionMapTips():
+            self.toggle_maptips_btn.setEnabled(False)
+            self.toggle_maptips_btn.setText("💡 MapTips: N/A")
+            return
+        is_active = self.iface.actionMapTips().isChecked() if checked is None else checked
+        self.toggle_maptips_btn.setChecked(is_active)
+        if is_active:
+            self.toggle_maptips_btn.setText("💡 MapTips: ON")
+            self.toggle_maptips_btn.setStyleSheet(
+                "font-size: 8pt; font-weight: bold; background-color: #10b981; color: white; border-radius: 4px; padding: 2px 8px;"
+            )
+        else:
+            self.toggle_maptips_btn.setText("💡 MapTips: OFF")
+            self.toggle_maptips_btn.setStyleSheet(
+                "font-size: 8pt; font-weight: bold; background-color: #64748b; color: white; border-radius: 4px; padding: 2px 8px;"
+            )
+
     def _apply_maptip_to_layer(self) -> None:
         if not isinstance(self._current_layer, QgsVectorLayer):
-            QMessageBox.warning(self, "02Maptips", "Please select a vector layer to apply the MapTip.")
+            QMessageBox.warning(self, "Qgis MapTips", "Please select a vector layer to apply the MapTip.")
             return
 
         config = self._build_config_from_ui()
@@ -638,22 +718,22 @@ class QgisMapTipsDock(QDockWidget):
 
         if hasattr(self.iface, "messageBar"):
             self.iface.messageBar().pushSuccess(
-                "02Maptips", f"MapTip applied successfully to '{self._current_layer.name()}'."
+                "Qgis MapTips", f"MapTip applied successfully to '{self._current_layer.name()}'."
             )
         else:
-            QMessageBox.information(self, "02Maptips", "MapTip applied successfully!")
+            QMessageBox.information(self, "Qgis MapTips", "MapTip applied successfully!")
 
     def _clear_maptip_from_layer(self) -> None:
         if isinstance(self._current_layer, QgsVectorLayer):
             self._current_layer.setMapTipTemplate("")
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushInfo(
-                    "02Maptips", f"MapTip cleared from '{self._current_layer.name()}'."
+                    "Qgis MapTips", f"MapTip cleared from '{self._current_layer.name()}'."
                 )
 
     def _apply_actions(self) -> None:
         if not isinstance(self._current_layer, QgsVectorLayer):
-            QMessageBox.warning(self, "02Maptips", "Please select a vector layer to inject actions.")
+            QMessageBox.warning(self, "Qgis MapTips", "Please select a vector layer to inject actions.")
             return
 
         selected_keys = [k for k, cb in self.action_checkboxes.items() if cb.isChecked()]
@@ -673,10 +753,10 @@ class QgisMapTipsDock(QDockWidget):
         )
         if hasattr(self.iface, "messageBar"):
             self.iface.messageBar().pushSuccess(
-                "02Maptips", f"{count} actions added to layer '{self._current_layer.name()}'."
+                "Qgis MapTips", f"{count} actions added to layer '{self._current_layer.name()}'."
             )
         else:
-            QMessageBox.information(self, "02Maptips", f"{count} actions added successfully!")
+            QMessageBox.information(self, "Qgis MapTips", f"{count} actions added successfully!")
 
     def _on_preset_selected(self, index: int) -> None:
         preset_file = self.preset_combo.currentData()
@@ -711,7 +791,7 @@ class QgisMapTipsDock(QDockWidget):
         if path:
             cfg = self._build_config_from_ui()
             cfg.save_json(path)
-            QMessageBox.information(self, "02Maptips", f"Preset saved to {path}")
+            QMessageBox.information(self, "Qgis MapTips", f"Preset saved to {path}")
 
     def _load_preset(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Load Card Preset", "", "JSON Files (*.json)")
