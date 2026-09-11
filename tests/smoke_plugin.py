@@ -174,7 +174,9 @@ def test_processing_provider():
     provider = QgisMapTipsProvider()
     provider.loadAlgorithms()
     algs = provider.algorithms()
-    return _ok(f"QgisMapTipsProvider loaded {len(algs)} algorithms", len(algs) >= 1)
+    names = [a.name() for a in algs]
+    has_both = "enhance_all_layers" in names and "export_layer_cards_report" in names
+    return _ok(f"QgisMapTipsProvider loaded {len(algs)} algorithms ({', '.join(names)})", has_both)
 
 
 def run_all(iface):
