@@ -1,0 +1,36 @@
+[general]
+name=Qgis Advanced Map Tips&Actions
+qgisMinimumVersion=3.28
+qgisMaximumVersion=4.99
+description=Advanced Map Tips and Actions Studio for vector and raster layers with Qt-safe HTML cards, inline charts, and 1-click web/spatial actions.
+version=0.1.0
+author=Yusuf Eminoglu
+email=yusuf.eminoglu@deu.edu.tr
+
+about=
+    Qgis Advanced Map Tips&Actions is an advanced Map Tips and Actions Studio designed for both vector and raster layers in QGIS 3.28+ and QGIS 4.
+    It bridges the gap between raw attribute tables and modern interactive map exploration by providing a palette-aware, dockable card designer, zero-dependency micro-charts, and a 1-click action library.
+    
+    Key Capabilities:
+    - Palette-Aware Dockable Studio: Automatically adapts to light, dark, and high-contrast QGIS themes.
+    - Universal Layout Archetypes: Modern KPI cards, comparison progress bars, multi-metric inline SVG donut charts, photo/media cards, and raster HUD cards.
+    - Zero-Dependency Inline Charts: Generates bulletproof HTML tables and pure SVG data-URIs that render natively inside Qt QTextDocument without external JavaScript or browser overhead.
+    - 1-Click Action Hub: Dynamic CRS-aware web actions (Google Maps, Street View, Yandex Maps, TKGM Cadastre), local document/photo viewers, and clipboard exports.
+    - Live Canvas HUD: Optional non-intrusive hover inspector for raster pixel sampling and multi-layer point inspection with configurable dwell-time debouncing.
+    - Native Persistence: Injected map tips and actions write directly to the layer style and QgsActionManager, remaining fully functional when shared with users who do not have the plugin installed.
+
+tracker=https://gitlab.com/geophilo1/qgis_maptips/-/issues
+repository=https://gitlab.com/geophilo1/qgis_maptips
+homepage=https://geophilo.com/qgis_maptips/
+
+category=Vector
+tags=maptip,maptips,actions,html,cards,charts,svg,hud,raster,vector,styling,dashboard,popup,tooltips
+icon=icons/icon.png
+
+experimental=False
+deprecated=False
+hasProcessingProvider=no
+license=GPL-3
+
+changelog=
+    0.1.0 - Initial release: dockable palette-aware card studio, 5 universal layout archetypes, inline SVG donut and table bar charts, dynamic CRS action builder, and live canvas HUD inspector.
