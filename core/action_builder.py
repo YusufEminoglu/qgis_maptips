@@ -1,13 +1,13 @@
 """Action builder for QGIS vector layers.
 
 Generates portable, dynamic CRS-aware web navigation actions, local document
-launchers, and clipboard exporters compatible with both QGIS 3.28+ and QGIS 4.
+launchers, cross-layer spatial selectors, and report exporters compatible with
+both QGIS 3.28+ and QGIS 4.
 """
 from __future__ import annotations
 
 import contextlib
-import uuid
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from qgis.core import QgsVectorLayer
@@ -26,6 +26,27 @@ CLIPBOARD_PYTHON_CODE = (
     "QApplication.clipboard().setText('\\n'.join(lines)); "
     "from qgis.utils import iface; "
     "iface.messageBar().pushInfo('02Maptips', 'Attributes copied to clipboard.') if hasattr(iface, 'messageBar') else None"
+)
+
+# 1-Click HTML Card Report Opener
+EXPORT_CARD_REPORT_PYTHON_CODE = (
+    "import tempfile, webbrowser, os; "
+    "from qgis.core import QgsProject, QgsExpression, QgsExpressionContext, QgsExpressionContextUtils; "
+    "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
+    "feat = layer.getFeature([% $id %]) if layer else None; "
+    "tmpl = layer.mapTipTemplate() if layer else ''; "
+    "if feat and tmpl: "
+    "    ctx = QgsExpressionContext(); "
+    "    ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer)); "
+    "    ctx.setFeature(feat); "
+    "    html_text = QgsExpression.replaceExpressionText(tmpl, ctx); "
+    "    full_html = ('<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Feature Report</title>' "
+    "                 '<style>body{font-family:sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}' "
+    "                 '.card-wrap{box-shadow:0 10px 25px rgba(0,0,0,0.1);background:#fff;border-radius:6px;overflow:hidden;}' "
+    "                 '</style></head><body><div class=\"card-wrap\">' + html_text + '</div></body></html>'); "
+    "    tmp = os.path.join(tempfile.gettempdir(), f'feature_card_[% $id %].html'); "
+    "    with open(tmp, 'w', encoding='utf-8') as f: f.write(full_html); "
+    "    webbrowser.open(f'file:///{tmp}')"
 )
 
 
@@ -86,10 +107,18 @@ AVAILABLE_ACTIONS = [
         "command": CLIPBOARD_PYTHON_CODE,
         "description": "Copy all feature attributes to the system clipboard",
     },
+    {
+        "key": "export_card_report",
+        "name": "Export Feature Card to HTML Report",
+        "short_title": "Export Card",
+        "type": "GenericPython",
+        "command": EXPORT_CARD_REPORT_PYTHON_CODE,
+        "description": "Render and open standalone HTML feature card report in browser",
+    },
 ]
 
 
-def build_open_file_action(field_name: str) -> dict:
+def build_open_file_action(field_name: str) -> dict[str, str]:
     """Return an action definition to open a file/URL stored in a feature field."""
     clean_field = field_name.strip()
     return {
@@ -102,10 +131,48 @@ def build_open_file_action(field_name: str) -> dict:
     }
 
 
+def build_select_intersecting_action(target_layer_name: str) -> dict[str, str]:
+    """Return a Python action selecting intersecting features in another layer."""
+    clean_tgt = target_layer_name.strip()
+    code = (
+        f"from qgis.core import QgsProject; "
+        f"src = QgsProject.instance().mapLayer('[% @layer_id %]'); "
+        f"tgts = QgsProject.instance().mapLayersByName('{clean_tgt}'); "
+        f"if src and tgts: "
+        f"    feat = src.getFeature([% $id %]); "
+        f"    tgt = tgts[0]; "
+        f"    ids = [f.id() for f in tgt.getFeatures() if f.geometry().intersects(feat.geometry())]; "
+        f"    tgt.selectByIds(ids); "
+        f"    from qgis.utils import iface; "
+        f"    iface.messageBar().pushInfo('02Maptips', f'Selected {{len(ids)}} intersecting features in {clean_tgt}.') if hasattr(iface, 'messageBar') else None"
+    )
+    return {
+        "key": f"select_intersects_{clean_tgt}",
+        "name": f"Select Intersecting in '{clean_tgt}'",
+        "short_title": f"Select {clean_tgt}",
+        "type": "GenericPython",
+        "command": code,
+        "description": f"Select all features in '{clean_tgt}' that spatially intersect this feature",
+    }
+
+
+def build_custom_url_action(name: str, url_template: str) -> dict[str, str]:
+    """Return a custom parameterized URL action."""
+    return {
+        "key": f"custom_url_{name.lower().replace(' ', '_')}",
+        "name": name,
+        "short_title": name[:10],
+        "type": "OpenUrl",
+        "command": url_template,
+        "description": f"Custom Web Action: {url_template}",
+    }
+
+
 def apply_actions_to_layer(
     layer: "QgsVectorLayer",
     action_keys: list[str],
     file_field: str = "",
+    intersect_target_layer: str = "",
 ) -> int:
     """Add selected actions to the layer's action manager.
 
@@ -122,6 +189,8 @@ def apply_actions_to_layer(
     actions_to_add = [act for act in AVAILABLE_ACTIONS if act["key"] in action_keys]
     if file_field and "open_file" in action_keys:
         actions_to_add.append(build_open_file_action(file_field))
+    if intersect_target_layer and "select_intersects" in action_keys:
+        actions_to_add.append(build_select_intersecting_action(intersect_target_layer))
 
     added_count = 0
     for item in actions_to_add:

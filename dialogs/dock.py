@@ -1,8 +1,10 @@
-"""Main dock panel for 02Maptips: Advanced Map Tips and Actions."""
+"""Main dock panel for Qgis Advanced Map Tips&Actions."""
 from __future__ import annotations
 
 import contextlib
 import html
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
 from qgis.PyQt.QtCore import Qt
@@ -10,6 +12,7 @@ from qgis.PyQt.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDockWidget,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGroupBox,
@@ -89,9 +92,9 @@ class QgisMapTipsDock(QDockWidget):
         hero_layout.setSpacing(4)
 
         top_row = QHBoxLayout()
-        title = QLabel("02Maptips: Map Tips & Actions")
+        title = QLabel("Qgis Advanced Map Tips&Actions")
         title.setObjectName("heroTitle")
-        badge = QLabel("STUDIO")
+        badge = QLabel("PRO")
         badge.setObjectName("heroBadge")
         top_row.addWidget(title)
         top_row.addStretch()
@@ -153,6 +156,31 @@ class QgisMapTipsDock(QDockWidget):
         scroll_layout.setContentsMargins(4, 4, 4, 4)
         scroll_layout.setSpacing(6)
 
+        # Preset Toolbar
+        preset_box = QHBoxLayout()
+        preset_lbl = QLabel("Template Preset:")
+        preset_lbl.setStyleSheet("font-size:8.5pt; font-weight:bold;")
+        self.preset_combo = QComboBox()
+        self.preset_combo.addItem("(Current / Custom)")
+        self.preset_combo.addItem("Real Estate Investment", "kpi_real_estate.json")
+        self.preset_combo.addItem("Capacity & Occupancy Bar", "progress_capacity.json")
+        self.preset_combo.addItem("Land Use Donut Shares", "donut_shares.json")
+        self.preset_combo.addItem("Temporal Sparkline Timeline", "sparkline_timeline.json")
+        self.preset_combo.currentIndexChanged.connect(self._on_preset_selected)
+
+        self.btn_save_preset = QPushButton("Save...")
+        self.btn_save_preset.setToolTip("Save current card configuration as JSON preset")
+        self.btn_save_preset.clicked.connect(self._save_preset)
+        self.btn_load_preset = QPushButton("Load...")
+        self.btn_load_preset.setToolTip("Load custom preset from JSON file")
+        self.btn_load_preset.clicked.connect(self._load_preset)
+
+        preset_box.addWidget(preset_lbl)
+        preset_box.addWidget(self.preset_combo, 1)
+        preset_box.addWidget(self.btn_save_preset)
+        preset_box.addWidget(self.btn_load_preset)
+        scroll_layout.addLayout(preset_box)
+
         # Style & Layout Group
         grp_style = QGroupBox("Layout & Color Palette")
         form_style = QFormLayout(grp_style)
@@ -161,6 +189,7 @@ class QgisMapTipsDock(QDockWidget):
         self.archetype_combo.addItem("Modern KPI Card", Archetype.KPI_CARD)
         self.archetype_combo.addItem("Comparison Progress Bar", Archetype.PROGRESS_BAR)
         self.archetype_combo.addItem("Multi-Metric Donut Chart", Archetype.DONUT_CHART)
+        self.archetype_combo.addItem("SVG Sparkline Trend", Archetype.SPARKLINE)
         self.archetype_combo.addItem("Media / Photo Card", Archetype.MEDIA_CARD)
         self.archetype_combo.addItem("Clean Attribute Grid", Archetype.CLEAN_TABLE)
         self.archetype_combo.currentIndexChanged.connect(self._update_preview)
@@ -211,9 +240,65 @@ class QgisMapTipsDock(QDockWidget):
         self.media_field_combo.currentIndexChanged.connect(self._update_preview)
         form_fields.addRow("Media/Photo Field:", self.media_field_combo)
 
-        # Attribute Checklist
         scroll_layout.addWidget(grp_fields)
 
+        # Conditional Formatting Group (Traffic-Light Badges)
+        grp_cond = QGroupBox("Conditional Status Badge (Traffic Light)")
+        form_cond = QFormLayout(grp_cond)
+        self.cb_cond_enable = QCheckBox("Enable Status Badge")
+        self.cb_cond_enable.toggled.connect(self._update_preview)
+        form_cond.addRow("", self.cb_cond_enable)
+
+        self.cond_field_combo = QComboBox()
+        self.cond_field_combo.currentIndexChanged.connect(self._update_preview)
+        form_cond.addRow("Rule Field:", self.cond_field_combo)
+
+        cond_row = QHBoxLayout()
+        self.cond_op_combo = QComboBox()
+        self.cond_op_combo.addItems([">=", ">", "<=", "<", "=="])
+        self.cond_op_combo.currentIndexChanged.connect(self._update_preview)
+        self.cond_val_edit = QLineEdit("50")
+        self.cond_val_edit.textChanged.connect(self._update_preview)
+        cond_row.addWidget(self.cond_op_combo)
+        cond_row.addWidget(self.cond_val_edit)
+        form_cond.addRow("Condition:", cond_row)
+
+        lbl_row = QHBoxLayout()
+        self.cond_lbl_true = QLineEdit("High / Pass")
+        self.cond_lbl_true.textChanged.connect(self._update_preview)
+        self.cond_lbl_false = QLineEdit("Low / Attention")
+        self.cond_lbl_false.textChanged.connect(self._update_preview)
+        lbl_row.addWidget(self.cond_lbl_true)
+        lbl_row.addWidget(self.cond_lbl_false)
+        form_cond.addRow("Labels (True / False):", lbl_row)
+
+        scroll_layout.addWidget(grp_cond)
+
+        # Relational / Cross-Layer Spatial Metrics
+        grp_rel = QGroupBox("Cross-Layer Relational Metric")
+        form_rel = QFormLayout(grp_rel)
+        self.cb_rel_enable = QCheckBox("Add Spatial/Relational Metric")
+        self.cb_rel_enable.toggled.connect(self._update_preview)
+        form_rel.addRow("", self.cb_rel_enable)
+
+        self.rel_layer_combo = QComboBox()
+        self.rel_layer_combo.currentIndexChanged.connect(self._update_preview)
+        form_rel.addRow("Related Layer:", self.rel_layer_combo)
+
+        self.rel_op_combo = QComboBox()
+        self.rel_op_combo.addItem("Spatial Intersects (Count)", ("intersects", "count"))
+        self.rel_op_combo.addItem("Spatial Contains (Count)", ("contains", "count"))
+        self.rel_op_combo.addItem("Nearest Neighbor (Name/ID)", ("nearest", "first"))
+        self.rel_op_combo.currentIndexChanged.connect(self._update_preview)
+        form_rel.addRow("Relationship:", self.rel_op_combo)
+
+        self.rel_label_edit = QLineEdit("Connected Objects")
+        self.rel_label_edit.textChanged.connect(self._update_preview)
+        form_rel.addRow("Metric Label:", self.rel_label_edit)
+
+        scroll_layout.addWidget(grp_rel)
+
+        # Attribute Checklist
         grp_attrs = QGroupBox("Detail Attributes (Checked to include)")
         attr_layout = QVBoxLayout(grp_attrs)
         self.attrs_list = QListWidget()
@@ -255,7 +340,8 @@ class QgisMapTipsDock(QDockWidget):
 
         info = QLabel(
             "Select 1-click actions to inject into the active vector layer. "
-            "Actions use dynamic CRS transformation and point-on-surface calculation."
+            "Actions use dynamic CRS transformation, point-on-surface calculation, "
+            "and cross-layer spatial selection."
         )
         info.setWordWrap(True)
         info.setStyleSheet("font-size: 8.5pt; color: #475569;")
@@ -268,7 +354,7 @@ class QgisMapTipsDock(QDockWidget):
         self.action_checkboxes: dict[str, QCheckBox] = {}
         for item in AVAILABLE_ACTIONS:
             cb = QCheckBox(f"{item['name']} — {item['description']}")
-            cb.setChecked(item["key"] in ("google_satellite", "google_streetview", "copy_clipboard"))
+            cb.setChecked(item["key"] in ("google_satellite", "google_streetview", "copy_clipboard", "export_card_report"))
             act_layout.addWidget(cb)
             self.action_checkboxes[item["key"]] = cb
 
@@ -279,6 +365,14 @@ class QgisMapTipsDock(QDockWidget):
         file_box.addWidget(self.cb_open_file)
         file_box.addWidget(self.file_field_combo, 1)
         act_layout.addLayout(file_box)
+
+        # Select Intersecting in Another Layer
+        sel_box = QHBoxLayout()
+        self.cb_sel_intersect = QCheckBox("Select Intersecting in Layer:")
+        self.sel_layer_combo = QComboBox()
+        sel_box.addWidget(self.cb_sel_intersect)
+        sel_box.addWidget(self.sel_layer_combo, 1)
+        act_layout.addLayout(sel_box)
 
         layout.addWidget(grp_actions)
         layout.addStretch()
@@ -295,7 +389,8 @@ class QgisMapTipsDock(QDockWidget):
 
         info = QLabel(
             "Live Canvas HUD enables non-blocking pixel value inspection when hovering over "
-            "raster layers (DEM, Slope, NDVI, Orthophoto) with debounced sampling."
+            "raster layers (DEM, Slope, NDVI, Orthophoto) with debounced sampling and composite "
+            "vector+raster multi-layer inspection."
         )
         info.setWordWrap(True)
         info.setStyleSheet("font-size: 8.5pt; color: #475569;")
@@ -308,9 +403,13 @@ class QgisMapTipsDock(QDockWidget):
         self.hud_enable_cb.toggled.connect(self._toggle_hud)
         form_hud.addRow("", self.hud_enable_cb)
 
+        self.hud_composite_cb = QCheckBox("Composite Mode (Inspect All Visible Rasters + Top Vector)")
+        self.hud_composite_cb.toggled.connect(self._on_hud_composite_toggled)
+        form_hud.addRow("", self.hud_composite_cb)
+
         self.hud_raster_combo = QComboBox()
         self.hud_raster_combo.currentIndexChanged.connect(self._on_hud_raster_changed)
-        form_hud.addRow("Raster Layer:", self.hud_raster_combo)
+        form_hud.addRow("Primary Raster:", self.hud_raster_combo)
 
         self.hud_debounce_spin = QSpinBox()
         self.hud_debounce_spin.setRange(100, 1000)
@@ -330,20 +429,29 @@ class QgisMapTipsDock(QDockWidget):
         prev_id = self.layer_combo.currentData()
         self.layer_combo.blockSignals(True)
         self.hud_raster_combo.blockSignals(True)
+        self.rel_layer_combo.blockSignals(True)
+        self.sel_layer_combo.blockSignals(True)
+
         self.layer_combo.clear()
         self.hud_raster_combo.clear()
+        self.rel_layer_combo.clear()
+        self.sel_layer_combo.clear()
 
         layers = list(QgsProject.instance().mapLayers().values())
         for lyr in layers:
             icon = "🗺️ " if isinstance(lyr, QgsVectorLayer) else "▦ "
             self.layer_combo.addItem(f"{icon}{lyr.name()}", lyr.id())
-            if isinstance(lyr, QgsRasterLayer):
+            if isinstance(lyr, QgsVectorLayer):
+                self.rel_layer_combo.addItem(lyr.name(), lyr.name())
+                self.sel_layer_combo.addItem(lyr.name(), lyr.name())
+            elif isinstance(lyr, QgsRasterLayer):
                 self.hud_raster_combo.addItem(f"▦ {lyr.name()}", lyr.id())
 
         self.layer_combo.blockSignals(False)
         self.hud_raster_combo.blockSignals(False)
+        self.rel_layer_combo.blockSignals(False)
+        self.sel_layer_combo.blockSignals(False)
 
-        # Restore selection
         idx = self.layer_combo.findData(prev_id)
         if idx >= 0:
             self.layer_combo.setCurrentIndex(idx)
@@ -380,6 +488,7 @@ class QgisMapTipsDock(QDockWidget):
                 f"Vector ({geom_names.get(geom, 'Unknown')}) · {cnt:,} features · CRS: {layer.crs().authid()}"
             )
             self._populate_vector_fields(layer)
+            self._hud.set_vector_layer(layer)
         elif isinstance(layer, QgsRasterLayer):
             self.layer_info_label.setText(
                 f"Raster · {layer.bandCount()} bands · {layer.width()}x{layer.height()} · CRS: {layer.crs().authid()}"
@@ -395,6 +504,7 @@ class QgisMapTipsDock(QDockWidget):
             self.kpi_field_combo,
             self.media_field_combo,
             self.file_field_combo,
+            self.cond_field_combo,
         ]
         for cb in combos:
             cb.blockSignals(True)
@@ -415,8 +525,6 @@ class QgisMapTipsDock(QDockWidget):
             item.setCheckState(Qt.CheckState.Checked)
             self.attrs_list.addItem(item)
 
-        # Smart defaults
-        field_names_lower = [f.name().lower() for f in fields]
         for name in fields.names():
             nl = name.lower()
             if any(k in nl for k in ("ad", "name", "title", "id", "label")):
@@ -433,6 +541,7 @@ class QgisMapTipsDock(QDockWidget):
             nl = name.lower()
             if any(k in nl for k in ("alan", "area", "skor", "score", "fiyat", "deger", "count")):
                 self.kpi_field_combo.setCurrentText(name)
+                self.cond_field_combo.setCurrentText(name)
                 break
 
         for cb in combos:
@@ -451,23 +560,53 @@ class QgisMapTipsDock(QDockWidget):
         config.kpi_unit = self.kpi_unit_edit.text().strip()
         config.media_field = self.media_field_combo.currentData() or ""
 
-        # Checked attributes
+        # Conditional badge
+        if self.cb_cond_enable.isChecked() and self.cond_field_combo.currentData():
+            config.conditional_rules = [
+                {
+                    "field": self.cond_field_combo.currentData(),
+                    "op": self.cond_op_combo.currentText(),
+                    "val": self.cond_val_edit.text().strip() or "0",
+                    "label_true": self.cond_lbl_true.text().strip(),
+                    "label_false": self.cond_lbl_false.text().strip(),
+                    "color_true": "#ef4444" if ">=" in self.cond_op_combo.currentText() else "#10b981",
+                    "color_false": "#10b981" if ">=" in self.cond_op_combo.currentText() else "#ef4444",
+                }
+            ]
+
+        # Relational metric
+        if self.cb_rel_enable.isChecked() and self.rel_layer_combo.currentText():
+            op_data = self.rel_op_combo.currentData()
+            config.relational_metrics = [
+                {
+                    "target_layer": self.rel_layer_combo.currentText(),
+                    "op": op_data[0],
+                    "aggregate": op_data[1],
+                    "field": "id",
+                    "label": self.rel_label_edit.text().strip(),
+                }
+            ]
+
+        # Attributes
         attrs = []
         for i in range(self.attrs_list.count()):
             it = self.attrs_list.item(i)
             if it.checkState() == Qt.CheckState.Checked:
                 fld = it.text()
-                # Skip if already title or kpi
                 if fld not in (config.title_field, config.kpi_field):
                     attrs.append((fld, fld))
         config.attribute_fields = attrs
+
+        # Sparklines
+        if config.archetype == Archetype.SPARKLINE:
+            config.sparkline_fields = [fld for fld, _ in attrs[:5]]
+
         return config
 
     def _update_preview(self) -> None:
         config = self._build_config_from_ui()
         raw_html = compile_maptip_html(config)
 
-        # Try evaluating on a sample feature if layer is vector
         if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
             sample_feature = None
             selected = self._current_layer.selectedFeatures()
@@ -497,7 +636,6 @@ class QgisMapTipsDock(QDockWidget):
         compiled_html = compile_maptip_html(config)
         self._current_layer.setMapTipTemplate(compiled_html)
 
-        # Notify user
         if hasattr(self.iface, "messageBar"):
             self.iface.messageBar().pushSuccess(
                 "02Maptips", f"MapTip applied successfully to '{self._current_layer.name()}'."
@@ -523,7 +661,16 @@ class QgisMapTipsDock(QDockWidget):
         if self.cb_open_file.isChecked() and file_field:
             selected_keys.append("open_file")
 
-        count = apply_actions_to_layer(self._current_layer, selected_keys, file_field)
+        intersect_tgt = self.sel_layer_combo.currentText() if self.cb_sel_intersect.isChecked() else ""
+        if self.cb_sel_intersect.isChecked() and intersect_tgt:
+            selected_keys.append("select_intersects")
+
+        count = apply_actions_to_layer(
+            self._current_layer,
+            selected_keys,
+            file_field=file_field,
+            intersect_target_layer=intersect_tgt,
+        )
         if hasattr(self.iface, "messageBar"):
             self.iface.messageBar().pushSuccess(
                 "02Maptips", f"{count} actions added to layer '{self._current_layer.name()}'."
@@ -531,11 +678,60 @@ class QgisMapTipsDock(QDockWidget):
         else:
             QMessageBox.information(self, "02Maptips", f"{count} actions added successfully!")
 
+    def _on_preset_selected(self, index: int) -> None:
+        preset_file = self.preset_combo.currentData()
+        if not preset_file:
+            return
+
+        presets_dir = Path(__file__).resolve().parent.parent / "templates"
+        preset_path = presets_dir / preset_file
+        if preset_path.exists():
+            cfg = TemplateConfig.load_json(preset_path)
+            self._apply_config_to_ui(cfg)
+
+    def _apply_config_to_ui(self, cfg: TemplateConfig) -> None:
+        idx_arch = self.archetype_combo.findData(cfg.archetype)
+        if idx_arch >= 0:
+            self.archetype_combo.setCurrentIndex(idx_arch)
+
+        idx_pal = self.palette_combo.findData(cfg.palette_key)
+        if idx_pal >= 0:
+            self.palette_combo.setCurrentIndex(idx_pal)
+
+        self.card_width_spin.setValue(cfg.card_width)
+        if cfg.kpi_label:
+            self.kpi_label_edit.setText(cfg.kpi_label)
+        if cfg.kpi_unit:
+            self.kpi_unit_edit.setText(cfg.kpi_unit)
+
+        self._update_preview()
+
+    def _save_preset(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(self, "Save Card Preset", "", "JSON Files (*.json)")
+        if path:
+            cfg = self._build_config_from_ui()
+            cfg.save_json(path)
+            QMessageBox.information(self, "02Maptips", f"Preset saved to {path}")
+
+    def _load_preset(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(self, "Load Card Preset", "", "JSON Files (*.json)")
+        if path:
+            cfg = TemplateConfig.load_json(path)
+            self._apply_config_to_ui(cfg)
+
     def _toggle_hud(self, checked: bool) -> None:
         if checked:
             self._hud.start()
         else:
             self._hud.stop()
+
+    def _on_hud_composite_toggled(self, checked: bool) -> None:
+        self._hud.set_composite_mode(checked)
+        if checked:
+            rasters = [lyr for lyr in QgsProject.instance().mapLayers().values() if isinstance(lyr, QgsRasterLayer)]
+            self._hud.set_target_rasters(rasters)
+        else:
+            self._on_hud_raster_changed(self.hud_raster_combo.currentIndex())
 
     def _on_hud_raster_changed(self, index: int) -> None:
         lyr_id = self.hud_raster_combo.currentData()

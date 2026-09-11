@@ -1,20 +1,25 @@
-"""Core engines for zero2maptips."""
+"""Core engines for qgis_maptips."""
 from .chart_engine import (
     build_progress_bar_table,
     build_segmented_bar_table,
     build_svg_donut_data_uri,
+    build_svg_sparkline,
 )
 from .template_engine import (
     Archetype,
     PALETTES,
     TemplateConfig,
+    build_conditional_badge_html,
+    build_relational_metric_row,
     compile_maptip_html,
     compile_raster_hud_html,
 )
 from .action_builder import (
     AVAILABLE_ACTIONS,
     apply_actions_to_layer,
+    build_custom_url_action,
     build_open_file_action,
+    build_select_intersecting_action,
 )
 
 
@@ -35,8 +40,13 @@ __all__ = [
     "build_progress_bar_table",
     "build_segmented_bar_table",
     "build_svg_donut_data_uri",
+    "build_svg_sparkline",
+    "build_conditional_badge_html",
+    "build_relational_metric_row",
     "AVAILABLE_ACTIONS",
     "apply_actions_to_layer",
     "build_open_file_action",
+    "build_select_intersecting_action",
+    "build_custom_url_action",
     "CanvasHoverHUD",
 ]

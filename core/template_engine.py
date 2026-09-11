@@ -1,19 +1,23 @@
 """Universal MapTip HTML template engine.
 
 Generates production-grade, Qt QTextDocument-compliant HTML tables with
-responsive cell widths, color themes, inline micro-charts, and media embedding.
+responsive cell widths, color themes, inline micro-charts, conditional status
+badges, and cross-layer relational aggregations.
 """
 from __future__ import annotations
 
 import html
-from dataclasses import dataclass, field
+import json
+from dataclasses import asdict, dataclass, field
 from enum import Enum
-from typing import Optional
+from pathlib import Path
+from typing import Any, Optional
 
 from .chart_engine import (
     build_progress_bar_table,
     build_segmented_bar_table,
     build_svg_donut_data_uri,
+    build_svg_sparkline,
 )
 
 
@@ -21,6 +25,7 @@ class Archetype(str, Enum):
     KPI_CARD = "kpi_card"
     PROGRESS_BAR = "progress_bar"
     DONUT_CHART = "donut_chart"
+    SPARKLINE = "sparkline"
     MEDIA_CARD = "media_card"
     CLEAN_TABLE = "clean_table"
     RASTER_HUD = "raster_hud"
@@ -107,9 +112,91 @@ class TemplateConfig:
     kpi_unit: str = ""
     progress_max_expr: str = "100"
     donut_fields: list[tuple[str, str, str]] = field(default_factory=list)  # (field, label, color)
+    sparkline_fields: list[str] = field(default_factory=list)
     media_field: str = ""
     attribute_fields: list[tuple[str, str]] = field(default_factory=list)  # (field_name, display_label)
+    # Conditional formatting rule: field name, threshold, condition (>, <, ==), badge_color, badge_label
+    conditional_rules: list[dict[str, Any]] = field(default_factory=list)
+    # Cross-layer relational metrics: target_layer, op, aggregate, field, label
+    relational_metrics: list[dict[str, Any]] = field(default_factory=list)
     footer_text: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        d = asdict(self)
+        d["archetype"] = self.archetype.value
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> TemplateConfig:
+        clean = dict(data)
+        if "archetype" in clean:
+            clean["archetype"] = Archetype(clean["archetype"])
+        return cls(**clean)
+
+    def save_json(self, path: Path | str) -> None:
+        p = Path(path)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        with open(p, "w", encoding="utf-8") as f:
+            json.dump(self.to_dict(), f, indent=2, ensure_ascii=False)
+
+    @classmethod
+    def load_json(cls, path: Path | str) -> TemplateConfig:
+        with open(path, "r", encoding="utf-8") as f:
+            return cls.from_dict(json.load(f))
+
+
+def build_conditional_badge_html(rule: dict[str, Any]) -> str:
+    """Build a dynamic status badge using QGIS CASE WHEN expression."""
+    fld = rule.get("field", "")
+    op = rule.get("op", ">")
+    val = rule.get("val", "0")
+    color_true = rule.get("color_true", "#ef4444")
+    color_false = rule.get("color_false", "#10b981")
+    label_true = html.escape(rule.get("label_true", "Alert"))
+    label_false = html.escape(rule.get("label_false", "Normal"))
+
+    expr_bg = f"CASE WHEN (\"{fld}\" {op} {val}) THEN '{color_true}' ELSE '{color_false}' END"
+    expr_lbl = f"CASE WHEN (\"{fld}\" {op} {val}) THEN '{label_true}' ELSE '{label_false}' END"
+
+    return (
+        f'<tr><td colspan="2" align="center" style="padding:4px 8px; border-bottom:1px solid #e2e8f0;">'
+        f'<table cellspacing="0" cellpadding="0" style="margin:2px auto;"><tr>'
+        f'<td bgcolor="[% {expr_bg} %]" style="color:#ffffff; font-size:9px; font-weight:bold; '
+        f'padding:2px 8px; border-radius:3px; text-align:center;">'
+        f'[% {expr_lbl} %]'
+        f'</td></tr></table>'
+        f'</td></tr>'
+    )
+
+
+def build_relational_metric_row(metric: dict[str, Any], pal: dict[str, str], row_bg: str) -> str:
+    """Build a relational/spatial aggregate row linking to another project layer."""
+    target_layer = metric.get("target_layer", "")
+    op = metric.get("op", "intersects")
+    agg = metric.get("aggregate", "count")
+    fld = metric.get("field", "id")
+    label = html.escape(metric.get("label", f"{agg.title()} in {target_layer}"))
+
+    if op == "intersects" and agg == "count":
+        expr = f"coalesce(overlay_intersects('{target_layer}', count:=\"{fld}\"), 0)"
+    elif op == "intersects":
+        expr = f"coalesce(overlay_intersects('{target_layer}', expression:=\"{fld}\", aggregate:='{agg}'), 0)"
+    elif op == "contains" and agg == "count":
+        expr = f"coalesce(overlay_contains('{target_layer}', count:=\"{fld}\"), 0)"
+    elif op == "nearest":
+        expr = f"coalesce(overlay_nearest('{target_layer}', \"{fld}\")[0], 'None')"
+    else:
+        expr = f"coalesce(overlay_intersects('{target_layer}', count:=\"{fld}\"), 0)"
+
+    return (
+        f'<tr bgcolor="{row_bg}">'
+        f'<td width="50%" style="color:{pal["text_secondary"]}; font-size:10px; '
+        f'padding:3px 8px; border-bottom:1px solid {pal["border"]};">&#128279; {label}</td>'
+        f'<td width="50%" align="right" style="color:{pal["accent"]}; font-size:10px; '
+        f'font-weight:bold; padding:3px 8px; border-bottom:1px solid {pal["border"]};">'
+        f'[% {expr} %]</td>'
+        f'</tr>'
+    )
 
 
 def compile_maptip_html(config: TemplateConfig) -> str:
@@ -139,6 +226,10 @@ def compile_maptip_html(config: TemplateConfig) -> str:
             f'style="color:{pal["sub_text"]}; font-size:10px; padding:3px 8px;">'
             f'[% "{config.subtitle_field}" %]</td></tr>'
         )
+
+    # Conditional Status Badges
+    for rule in config.conditional_rules:
+        lines.append(build_conditional_badge_html(rule))
 
     # 2. Archetype-specific Body Section
     if config.archetype == Archetype.KPI_CARD and config.kpi_field:
@@ -188,6 +279,18 @@ def compile_maptip_html(config: TemplateConfig) -> str:
             f'</td></tr>'
         )
 
+    elif config.archetype == Archetype.SPARKLINE and config.sparkline_fields:
+        spark_svg = build_svg_sparkline(
+            config.sparkline_fields, width=w - 24, height=28, bar_color=pal["accent"]
+        )
+        lines.append(
+            f'<tr><td colspan="2" style="padding:6px 8px; background-color:{pal["row_alt"]}; '
+            f'border-bottom:1px solid {pal["border"]}; text-align:center;">'
+            f'<div style="font-size:9px; color:{pal["text_secondary"]}; margin-bottom:3px;">Trend Timeline</div>'
+            f'{spark_svg}'
+            f'</td></tr>'
+        )
+
     elif config.archetype == Archetype.MEDIA_CARD and config.media_field:
         lines.append(
             f'<tr><td colspan="2" align="center" style="padding:6px; background-color:{pal["row_alt"]}; '
@@ -198,6 +301,7 @@ def compile_maptip_html(config: TemplateConfig) -> str:
         )
 
     # 3. Attribute Key-Value Rows
+    row_count = 0
     if config.attribute_fields:
         for idx, (fld, lbl) in enumerate(config.attribute_fields):
             row_bg = pal["card_bg"] if idx % 2 == 0 else pal["row_alt"]
@@ -211,8 +315,16 @@ def compile_maptip_html(config: TemplateConfig) -> str:
                 f'[% "{fld}" %]</td>'
                 f'</tr>'
             )
+            row_count += 1
 
-    # 4. Optional Footer
+    # 4. Cross-Layer Relational Metrics
+    if config.relational_metrics:
+        for metric in config.relational_metrics:
+            row_bg = pal["card_bg"] if row_count % 2 == 0 else pal["row_alt"]
+            lines.append(build_relational_metric_row(metric, pal, row_bg))
+            row_count += 1
+
+    # 5. Optional Footer
     if config.footer_text:
         safe_ft = html.escape(config.footer_text)
         lines.append(

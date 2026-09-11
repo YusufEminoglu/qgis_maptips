@@ -1,0 +1,27 @@
+{
+  "archetype": "sparkline",
+  "palette_key": "purple",
+  "card_width": 320,
+  "title_field": "city_name",
+  "subtitle_field": "metric_name",
+  "sparkline_fields": [
+    "val_2020",
+    "val_2021",
+    "val_2022",
+    "val_2023",
+    "val_2024"
+  ],
+  "attribute_fields": [
+    [
+      "latest_val",
+      "Current Metric"
+    ],
+    [
+      "growth_rate",
+      "Annual Growth"
+    ]
+  ],
+  "conditional_rules": [],
+  "relational_metrics": [],
+  "footer_text": "5-Year Temporal Progression"
+}

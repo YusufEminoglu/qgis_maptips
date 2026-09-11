@@ -121,3 +121,43 @@ def build_svg_donut_data_uri(
         f'</svg>'
     )
     return f'<img src="data:image/svg+xml;utf8,{svg}" width="{size}" height="{size}" />'
+
+
+def build_svg_sparkline(
+    fields: list[str],
+    width: int = 140,
+    height: int = 28,
+    bar_color: str = "#10b981",
+    bg_color: str = "#f1f5f9",
+) -> str:
+    """Return an SVG mini bar sparkline for sequential/temporal fields."""
+    if not fields:
+        return ""
+
+    n = len(fields)
+    step = width / n
+    bar_w = max(4.0, step - 3.0)
+
+    # Calculate overall max expression among the fields to normalize heights
+    field_coalesced = [f"coalesce(\"{f}\", 0.0)" for f in fields]
+    max_expr = f"greatest({', '.join(field_coalesced)})"
+
+    bars = []
+    for idx, f in enumerate(fields):
+        x = idx * step + 1.5
+        val_expr = f"coalesce(\"{f}\", 0.0)"
+        h_expr = f"clamp(2.0, round({height - 4} * ({val_expr}) / (nullif({max_expr}, 0.0)), 1), {height - 4})"
+        y_expr = f"({height - 2} - {h_expr})"
+
+        bars.append(
+            f'<rect x="{x:.1f}" y="[% {y_expr} %]" width="{bar_w:.1f}" height="[% {h_expr} %]" '
+            f'rx="2" fill="{bar_color}" opacity="0.9"/>'
+        )
+
+    svg = (
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">'
+        f'<rect width="{width}" height="{height}" fill="{bg_color}" rx="3"/>'
+        f'{"".join(bars)}'
+        f'</svg>'
+    )
+    return f'<img src="data:image/svg+xml;utf8,{svg}" width="{width}" height="{height}" />'

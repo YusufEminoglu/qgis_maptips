@@ -169,6 +169,14 @@ def test_action_injection():
     return _ok("apply_actions_to_layer registered actions", added == 2 and len(actions) == 2)
 
 
+def test_processing_provider():
+    from qgis_maptips.processing.provider import QgisMapTipsProvider
+    provider = QgisMapTipsProvider()
+    provider.loadAlgorithms()
+    algs = provider.algorithms()
+    return _ok(f"QgisMapTipsProvider loaded {len(algs)} algorithms", len(algs) >= 1)
+
+
 def run_all(iface):
     print("=" * 60)
     print(" qgis_maptips - lifecycle & core smoke tests")
@@ -179,6 +187,7 @@ def run_all(iface):
         test_lifecycle(iface),
         test_maptip_injection(),
         test_action_injection(),
+        test_processing_provider(),
     ]
     passed = sum(1 for r in results if r)
     print("-" * 60)

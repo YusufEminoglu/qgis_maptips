@@ -1,0 +1,33 @@
+{
+  "archetype": "kpi_card",
+  "palette_key": "emerald",
+  "card_width": 320,
+  "title_field": "name",
+  "subtitle_field": "type",
+  "kpi_field": "score",
+  "kpi_label": "Investment Score",
+  "kpi_unit": "/100",
+  "attribute_fields": [
+    [
+      "area_m2",
+      "Total Area (m²)"
+    ],
+    [
+      "status",
+      "Approval Status"
+    ]
+  ],
+  "conditional_rules": [
+    {
+      "field": "score",
+      "op": ">=",
+      "val": "70",
+      "color_true": "#10b981",
+      "color_false": "#ef4444",
+      "label_true": "High Potential",
+      "label_false": "Under Observation"
+    }
+  ],
+  "relational_metrics": [],
+  "footer_text": "Generated via 02Maptips Studio"
+}

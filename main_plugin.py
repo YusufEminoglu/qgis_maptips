@@ -7,8 +7,10 @@ import os
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QAction, QIcon
 from qgis.PyQt.QtWidgets import QMessageBox
+from qgis.core import QgsApplication
 
 from .dialogs.dock import QgisMapTipsDock
+from .processing.provider import QgisMapTipsProvider
 
 
 class QgisMapTipsPlugin:
@@ -22,8 +24,20 @@ class QgisMapTipsPlugin:
         self.action = None
         self.about_action = None
         self.dock = None
+        self.provider = None
+
+    def initProcessing(self) -> None:
+        if self.provider is not None:
+            return
+        registry = QgsApplication.processingRegistry()
+        if registry.providerById(QgisMapTipsProvider.PROVIDER_ID) is None:
+            provider = QgisMapTipsProvider()
+            if registry.addProvider(provider):
+                self.provider = provider
 
     def initGui(self) -> None:
+        self.initProcessing()
+
         if self.iface is None:
             return
 
@@ -66,6 +80,10 @@ class QgisMapTipsPlugin:
             self.about_action.deleteLater()
             self.about_action = None
 
+        if self.provider is not None:
+            QgsApplication.processingRegistry().removeProvider(self.provider)
+            self.provider = None
+
     def _toggle_dock(self, visible: bool) -> None:
         if self.dock is None:
             self.dock = QgisMapTipsDock(self.iface, self.iface.mainWindow())
@@ -91,6 +109,6 @@ class QgisMapTipsPlugin:
             "<b>Author:</b> Yusuf Eminoğlu<br/>"
             "<b>License:</b> GPL-3.0-or-later</p>"
             "<p>Design responsive Qt-safe HTML cards, zero-dependency micro-charts "
-            "(progress bars, SVG donuts), and 1-click dynamic web and spatial actions "
-            "for vector and raster layers in QGIS 3.28+ and QGIS 4.</p>",
+            "(progress bars, SVG donuts, sparklines), conditional status badges, "
+            "and 1-click dynamic web and spatial actions for vector and raster layers in QGIS 3.28+ and QGIS 4.</p>",
         )

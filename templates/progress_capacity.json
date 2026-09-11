@@ -1,0 +1,24 @@
+{
+  "archetype": "progress_bar",
+  "palette_key": "blue",
+  "card_width": 320,
+  "title_field": "name",
+  "subtitle_field": "category",
+  "kpi_field": "occupancy",
+  "kpi_label": "Capacity Occupancy",
+  "kpi_unit": "%",
+  "progress_max_expr": "100",
+  "attribute_fields": [
+    [
+      "capacity",
+      "Total Capacity"
+    ],
+    [
+      "updated_at",
+      "Last Audit"
+    ]
+  ],
+  "conditional_rules": [],
+  "relational_metrics": [],
+  "footer_text": "Live Infrastructure Monitor"
+}

@@ -1,0 +1,33 @@
+{
+  "archetype": "donut_chart",
+  "palette_key": "slate",
+  "card_width": 340,
+  "title_field": "district",
+  "subtitle_field": "zone",
+  "donut_fields": [
+    [
+      "res_area",
+      "Residential",
+      "#38bdf8"
+    ],
+    [
+      "com_area",
+      "Commercial",
+      "#10b981"
+    ],
+    [
+      "ind_area",
+      "Industrial",
+      "#f59e0b"
+    ]
+  ],
+  "attribute_fields": [
+    [
+      "total_area",
+      "Gross Area"
+    ]
+  ],
+  "conditional_rules": [],
+  "relational_metrics": [],
+  "footer_text": "Land Use Synthesis"
+}
