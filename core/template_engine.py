@@ -283,7 +283,9 @@ def build_card_action_buttons_row(action_keys: list[str], pal: dict[str, str], c
         if not act:
             continue
         icon = icons.get(key, "&#9881;")
-        title = html.escape(act.get("short_title", act["name"]))
+        raw_title = act.get("short_title", act["name"])
+        clean_title = raw_title.lstrip("⚡ ").strip()
+        title = html.escape(clean_title)
         href = act["command"] if act.get("type") == "OpenUrl" else f"action:{key}"
         buttons.append(
             f'<td style="padding:2px 3px;">'

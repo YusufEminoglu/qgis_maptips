@@ -249,7 +249,9 @@ class TestActionBuilder(unittest.TestCase):
         row_html_tkgm = build_card_action_buttons_row(["tkgm_cadastre"], {
             "sub_bg": "#115e59", "sub_text": "#ccfbf1", "row_alt": "#f8fafc", "border": "#e2e8f0", "text_secondary": "#64748b"
         })
-        self.assertIn("⚡ TKGM (TR)", row_html_tkgm)
+        self.assertIn("&#9889; TKGM (TR)", row_html_tkgm)
+        self.assertNotIn("&#9889; ⚡", row_html_tkgm)
+        self.assertNotIn("⚡ ⚡", row_html_tkgm)
         self.assertIn("action:tkgm_cadastre", row_html_tkgm)
 
     def test_card_action_buttons_row_wrapping(self):

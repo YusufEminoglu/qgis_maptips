@@ -164,7 +164,7 @@ AVAILABLE_ACTIONS = [
     {
         "key": "tkgm_cadastre",
         "name": "TKGM Instant Cadastre (Turkey Only)",
-        "short_title": "⚡ TKGM (TR)",
+        "short_title": "TKGM (TR)",
         "type": "GenericPython",
         "command": TKGM_INSTANT_QUERY_PYTHON_CODE,
         "description": "Instant official cadastral query via MEGSIS API: adds parcel boundary to map & copies details (Turkey Only)",
