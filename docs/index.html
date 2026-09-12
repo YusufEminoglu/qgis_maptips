@@ -1580,6 +1580,11 @@ if not any(a.name() == action_def.name for a in action_manager.actions()):
                 <td>Yandex Maps Aerial</td>
                 <td class="col-mono" style="font-size:11px;">https://yandex.com/maps/?l=sat%2Cskl&ll=[% x(...) %]%2C[% y(...) %]&z=19</td>
               </tr>
+              <tr>
+                <td class="col-mono col-bold">tkgm_cadastre</td>
+                <td>TKGM Parsel Sorgu (Web Portal)</td>
+                <td class="col-mono" style="font-size:11px;">https://parselsorgu.tkgm.gov.tr/#ara/cografi/[% y(...) %]/[% x(...) %]</td>
+              </tr>
             </tbody>
           </table>
         </div>
@@ -1591,17 +1596,19 @@ if not any(a.name() == action_def.name for a in action_manager.actions()):
       <div class="card-header">
         <div class="card-icon">📋</div>
         <div class="card-title-group">
-          <h4>4.3 Desktop OS Operations: Clipboard Injection & Document Launchers</h4>
-          <div class="card-id">SYSTEM INTEGRATION · QCLIPBOARD & QDESKTOPSERVICES</div>
+          <h4>4.3 Desktop OS Operations: Clipboard, Zoom, Buffer & Document Launchers</h4>
+          <div class="card-id">SYSTEM INTEGRATION · QCLIPBOARD, CANVAS PROJECTION & QDESKTOPSERVICES</div>
         </div>
         <button class="copy-link-btn" onclick="copyAnchor('sec-4-3')" title="Copy direct link">🔗</button>
       </div>
       <div class="card-body">
         <p>
-          Beyond web URLs, the actions engine registers operating-system level triggers:
+          Beyond web URLs, the actions engine registers operating-system and canvas-level triggers:
         </p>
         <ul>
           <li><strong>Copy Attributes to Clipboard:</strong> Formats all feature attributes into a clean, tab-delimited or JSON string and pushes it into the system clipboard via <code>QGuiApplication.clipboard().setText(...)</code>.</li>
+          <li><strong>Zoom to Feature (Adaptive CRS Padding):</strong> Centers and zooms the map canvas onto the feature with CRS-aware dynamic padding (0.001° for geographic WGS84, 30m or 25% dimension margin for projected metric systems) and immediate canvas repaint.</li>
+          <li><strong>Buffer Feature (50m Temp Layer):</strong> Computes an accurate 50-meter spatial buffer polygon around the feature (with centroid latitude metric compensation in geographic CRS) and inserts it at the top of the layer tree in a styled <code>Feature Buffers (Temp)</code> memory layer.</li>
           <li><strong>Open Local Document / CAD File:</strong> Inspects relative or absolute paths stored in an attribute (e.g. <code>C:\Projects\CAD\parsel_412.dwg</code> or <code>survey_report.pdf</code>) and invokes the operating system's default viewer via <code>QDesktopServices.openUrl(QUrl.fromLocalFile(...))</code>.</li>
         </ul>
       </div>
@@ -1661,6 +1668,9 @@ Headers:
           <li>Turkish attributes are extracted and normalized: <code>il</code> (Province), <code>ilce</code> (District), <code>mahalle</code> (Neighborhood), <code>ada_no</code> (Block No), <code>parsel_no</code> (Parcel No), <code>alan_m2</code> (Deed Area), <code>mevkii</code>, and <code>nitelik</code> (Zoning Land-Use).</li>
           <li>The feature is committed to a persistent memory layer titled <code>TKGM Parselleri (TR)</code> with cadastral amber symbology.</li>
         </ol>
+        <p style="margin-top:10px; font-size:12.5px; background:var(--gs-slate-100); padding:8px 12px; border-left:3px solid var(--gs-amber); border-radius:4px;">
+          <strong>Dual TKGM Integration:</strong> Users have access to both (1) the <strong>1-Click Canvas Cadastre Tool</strong> for downloading raw vector polygons and land-use records into QGIS, and (2) the <strong>TKGM Parsel Sorgu (Web)</strong> action inside MapTip cards for 1-click navigation to the official government web portal in their default browser.
+        </p>
       </div>
     </div>
 

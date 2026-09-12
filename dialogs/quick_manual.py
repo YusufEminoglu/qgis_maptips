@@ -1,4 +1,4 @@
-﻿"""Compact built-in Quick Manual dialog for Qgis Advanced Map Tips&Actions.
+"""Compact built-in Quick Manual dialog for Qgis Advanced Map Tips&Actions.
 
 Provides a fast, step-by-step visual walkthrough of all core capabilities
 directly inside QGIS, with 1-click links to the comprehensive online guide
@@ -110,9 +110,9 @@ class QuickManualDialog(QDialog):
         tabs.addTab(self._create_stage_tab(
             "⚡ 1-Click Action Hub",
             [
-                ("Web Navigation Actions", "1-click injection of dynamic CRS-aware actions: <b>Google Maps (Satellite)</b>, <b>Google Street View</b>, <b>OpenStreetMap</b>, and <b>Yandex Maps</b>."),
+                ("Web Navigation Actions", "1-click injection of dynamic CRS-aware actions: <b>Google Maps (Satellite)</b>, <b>Google Street View</b>, <b>OpenStreetMap</b>, <b>Yandex Maps</b>, and <b>TKGM Parsel Sorgu (Web)</b>."),
                 ("Point-on-Surface Math", "Coordinates are calculated using surface centroids and transformed to EPSG:4326 on the fly, guaranteeing valid pin drops for irregular polygons."),
-                ("Desktop Tools & File Openers", "Inject <b>Copy Attributes to Clipboard</b>, <b>Open File/Photo from Attribute</b>, or <b>Export Standalone HTML Report</b>."),
+                ("Desktop Tools & Spatial Ops", "Inject <b>Copy Attributes to Clipboard</b>, <b>Export HTML Report</b>, <b>Zoom to Feature (Adaptive CRS Padding)</b>, or <b>Buffer Feature (50m Temp Layer)</b>."),
                 ("Cross-Layer Spatial Selectors", "Select all features in a target layer (e.g. parcels, trees, pipes) that spatially intersect the clicked polygon."),
                 ("3 Execution Scenarios", "Trigger actions directly from <b>MapTip card pills</b>, from canvas click using the yellow gear <b>Canvas Action Tool</b>, or right-clicking in <b>Attribute Tables</b>."),
             ],
@@ -122,13 +122,13 @@ class QuickManualDialog(QDialog):
         tabs.addTab(self._create_stage_tab(
             "🇹🇷 Instant Canvas Cadastre (TKGM)",
             [
-                ("1-Click Canvas Cadastre Tool", "Under Actions Hub, click <b>⚡ Click Canvas to Download Parcel</b>. An amber crosshair cursor activates on the map canvas."),
+                ("1-Click Canvas Cadastre Tool", "Under Actions Hub, click <b>⚡ Click Canvas to Download</b>. An amber crosshair cursor activates on the map canvas to download real parcel polygons into QGIS."),
                 ("Anywhere Canvas Query", "Click anywhere in Turkey without needing a selected layer or satellite provider. The tool queries the official TKGM MEGSİS API at the clicked coordinate."),
                 ("Automatic Polygon Vector Layer", "Parses official coordinates and adds the parcel boundary into the <code>TKGM Parselleri (TR)</code> memory layer."),
                 ("Centroid-Inside Labeling", "New parcels automatically receive crisp <code>ada_no / parsel_no</code> labels placed inside the polygon with subtle text buffers."),
-                ("Fair-Use Limit Handling", "TKGM MEGSİS applies an IP-based fair-use quota (~100 daily queries). If exceeded, a friendly Turkish notice explains the quota and midnight reset."),
+                ("1-Click Web Portal Navigation", "Click the <b>Parsel Sorgu</b> action button in MapTip cards to open the exact parcel location directly in the official TKGM Parsel Sorgu web portal in your browser."),
             ],
-            "💡 <b>Tip:</b> You can also preview and query cadastral parcels directly on existing vector layer features by running the TKGM action in the sample navigator."
+            "💡 <b>Tip:</b> You can both download raw parcel polygons to the canvas via the 1-click tool, and open official cadastral records in the browser via MapTip action buttons."
         ), "4. TKGM Cadastre")
 
         tabs.addTab(self._create_stage_tab(
