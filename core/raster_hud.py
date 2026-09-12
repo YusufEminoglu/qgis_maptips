@@ -95,16 +95,55 @@ class CanvasHoverHUD(QObject):
 
         self._last_screen_pos = QPoint()
         self._last_global_pos = QPoint()
+        self._pinned_global_pos = QPoint()
+        self._pinned_screen_pos = QPoint()
         self._active_raster_layers: list[QgsRasterLayer] = []
         self._active_vector_layer: Optional[QgsVectorLayer] = None
         self._composite_mode = False
-        self._is_active = False
+        self._filter_installed = False
+        self._hud_enabled = False
+        self._cursor_enabled = False
         self._pinned = False
         self._use_custom_cursor = True
         self._inspection_cursor: Optional[QCursor] = None
         with contextlib.suppress(Exception):
             self._inspection_cursor = create_inspection_cursor()
         self._last_sampled_html = ""
+
+    def _sync_canvas_event_filter(self) -> None:
+        """Dynamically attach or detach canvas viewport event filter based on active flags."""
+        vp = self.canvas.viewport() if self.canvas else None
+        if not vp:
+            return
+
+        should_listen = self._hud_enabled or self._cursor_enabled
+        if should_listen and not self._filter_installed:
+            vp.installEventFilter(self)
+            self._filter_installed = True
+        elif not should_listen and self._filter_installed:
+            with contextlib.suppress(Exception):
+                vp.removeEventFilter(self)
+            self._filter_installed = False
+
+        if self._cursor_enabled and self._use_custom_cursor and self._inspection_cursor:
+            vp.setCursor(self._inspection_cursor)
+        elif not self._cursor_enabled:
+            with contextlib.suppress(Exception):
+                vp.unsetCursor()
+
+    def set_cursor_mode(self, enabled: bool) -> None:
+        """Toggle unique inspection reticle cursor on canvas."""
+        self._cursor_enabled = enabled
+        self._sync_canvas_event_filter()
+
+    def set_hud_mode(self, enabled: bool) -> None:
+        """Toggle live HUD inspection sampling and hover tooltips."""
+        self._hud_enabled = enabled
+        if not enabled:
+            self._timer.stop()
+            if not self._pinned:
+                QToolTip.hideText()
+        self._sync_canvas_event_filter()
 
     def set_active_raster(self, layer: Optional[QgsRasterLayer]) -> None:
         """Set a single target raster layer."""
@@ -122,67 +161,73 @@ class CanvasHoverHUD(QObject):
         self._composite_mode = enabled
 
     def set_use_custom_cursor(self, enabled: bool) -> None:
-        """Toggle unique inspection cursor on canvas."""
+        """Toggle unique inspection cursor preference."""
         self._use_custom_cursor = enabled
-        if self._is_active and self.canvas and self.canvas.viewport():
-            if enabled and self._inspection_cursor:
-                self.canvas.viewport().setCursor(self._inspection_cursor)
-            else:
-                with contextlib.suppress(Exception):
-                    self.canvas.viewport().unsetCursor()
+        self._sync_canvas_event_filter()
 
     def set_pinned(self, pinned: bool) -> None:
         """Pin/freeze current tooltip so it remains stationary on canvas."""
         self._pinned = pinned
+        if pinned:
+            # Lock position to currently hovered position
+            self._pinned_global_pos = self._last_global_pos
+            self._pinned_screen_pos = self._last_screen_pos
         self.pinStateChanged.emit(pinned)
-        if self._is_active and self._last_sampled_html:
-            self._display_hud(self._last_sampled_html)
+        if self._hud_enabled:
+            if self._last_sampled_html:
+                self._display_hud(self._last_sampled_html)
+            elif pinned:
+                standby_html = (
+                    '<table width="260" cellspacing="0" cellpadding="0" '
+                    'style="font-family:Segoe UI, sans-serif; background-color:#0f172a; '
+                    'border:1.5px solid #f59e0b; border-collapse:collapse; border-radius:6px;">'
+                    '<tr><td bgcolor="#f59e0b" style="color:#0f172a; font-size:11px; font-weight:bold; padding:5px 8px;">'
+                    '&#128204; HUD Pinned (Ready)</td></tr>'
+                    '<tr><td style="color:#cbd5e1; font-size:9.5px; padding:8px;">'
+                    'Live HUD is locked. Shift+Click the canvas or uncheck to unlock.</td></tr>'
+                    '</table>'
+                )
+                self._display_hud(standby_html)
 
     def is_pinned(self) -> bool:
         return self._pinned
 
     def start(self) -> None:
-        """Install viewport event filter and activate hover listening with unique cursor."""
-        if not self._is_active and self.canvas and self.canvas.viewport():
-            self.canvas.viewport().installEventFilter(self)
-            self._is_active = True
-            if self._use_custom_cursor and self._inspection_cursor:
-                self.canvas.viewport().setCursor(self._inspection_cursor)
+        """Activate both HUD hover sampling and inspection cursor."""
+        self.set_hud_mode(True)
+        self.set_cursor_mode(True)
 
     def stop(self) -> None:
-        """Uninstall viewport event filter, restore cursor, and hide tooltips."""
-        if self._is_active and self.canvas and self.canvas.viewport():
-            self._timer.stop()
-            with contextlib.suppress(Exception):
-                self.canvas.viewport().removeEventFilter(self)
-            self._is_active = False
-            self._pinned = False
-            self.pinStateChanged.emit(False)
-            if self.canvas and self.canvas.viewport():
-                with contextlib.suppress(Exception):
-                    self.canvas.viewport().unsetCursor()
-            QToolTip.hideText()
+        """Deactivate HUD hover sampling, restore cursor, and clear tooltips."""
+        self.set_hud_mode(False)
+        self.set_cursor_mode(False)
+        self._pinned = False
+        self.pinStateChanged.emit(False)
+        QToolTip.hideText()
 
     def is_active(self) -> bool:
-        return self._is_active
+        return self._hud_enabled
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
-        if not self._is_active:
-            return super().eventFilter(watched, event)
-
         etype = event.type()
         ev_mouse_move = QEvent.Type.MouseMove if hasattr(QEvent, "Type") else QEvent.MouseMove
         ev_enter = QEvent.Type.Enter if hasattr(QEvent, "Type") else QEvent.Enter
         ev_leave = QEvent.Type.Leave if hasattr(QEvent, "Type") else QEvent.Leave
         ev_press = QEvent.Type.MouseButtonPress if hasattr(QEvent, "Type") else QEvent.MouseButtonPress
 
-        # Enforce unique inspection cursor across viewport events
-        if self._use_custom_cursor and self._inspection_cursor and self.canvas and self.canvas.viewport():
+        vp = self.canvas.viewport() if self.canvas else None
+
+        # 1. Enforce unique inspection cursor across viewport events
+        if self._cursor_enabled and self._use_custom_cursor and self._inspection_cursor and vp:
             if etype in (ev_mouse_move, ev_enter):
-                vp = self.canvas.viewport()
-                if vp and vp.cursor().shape() != self._inspection_cursor.shape():
+                if vp.cursor().shape() != self._inspection_cursor.shape():
                     vp.setCursor(self._inspection_cursor)
 
+        # If HUD sampling is disabled, pass through events immediately
+        if not self._hud_enabled:
+            return super().eventFilter(watched, event)
+
+        # 2. Mouse Move Handling
         if etype == ev_mouse_move:
             pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
             global_pos = (
@@ -198,6 +243,10 @@ class CanvasHoverHUD(QObject):
             if not self._pinned:
                 if dist >= 3 or not self._timer.isActive():
                     self._timer.start(self.debounce_ms)
+            else:
+                # If pinned, ensure the tooltip stays visible if Qt tried to dismiss it
+                if not QToolTip.isVisible() and self._last_sampled_html:
+                    self._display_hud(self._last_sampled_html)
 
         elif etype == ev_press:
             # Shift+Click on canvas toggles pin/freeze state
@@ -206,10 +255,9 @@ class CanvasHoverHUD(QObject):
             if hasattr(event, "button") and event.button() == btn_left:
                 if hasattr(event, "modifiers") and (event.modifiers() & mod_shift):
                     self.set_pinned(not self._pinned)
+                    return True  # Consume click to avoid disrupting map selection
 
         elif etype == ev_leave:
-            # Verify if mouse cursor genuinely left the canvas viewport boundary
-            vp = self.canvas.viewport() if self.canvas else None
             if vp:
                 local_pos = vp.mapFromGlobal(QCursor.pos())
                 if not vp.rect().contains(local_pos):
@@ -304,27 +352,28 @@ class CanvasHoverHUD(QObject):
             QToolTip.hideText()
             return
 
+        vp = self.canvas.viewport() if self.canvas else self.canvas
+
         # Add pin status indicator in footer
         if self._pinned:
             footer = (
                 '<tr><td colspan="2" bgcolor="#1e293b" style="font-size:8.5px; color:#f59e0b; padding:3px 8px; '
                 'border-top:1px solid #334155; text-align:right;">&#128204; Pinned (Shift+Click or uncheck to unlock)</td></tr>'
             )
+            # Use frozen position so moving the mouse does not shift the pinned card
+            base_pos = self._pinned_global_pos if not self._pinned_global_pos.isNull() else self._last_global_pos
+            offset_pos = base_pos + QPoint(22, 22)
+            # Infinite tolerance rect prevents Qt from dismissing pinned tooltip on mouse moves
+            tolerance_rect = QRect(-500000, -500000, 1000000, 1000000)
         else:
             footer = (
                 '<tr><td colspan="2" bgcolor="#0f172a" style="font-size:8px; color:#64748b; padding:2px 8px; '
                 'border-top:1px solid #334155; text-align:right;">Shift+Click canvas to pin HUD</td></tr>'
             )
-        display_html = html_content.replace('</table>', f'{footer}</table>')
+            offset_pos = self._last_global_pos + QPoint(22, 22)
+            # When unpinned, use canvas viewport rect so cursor moving inside canvas does NOT flicker/close
+            tolerance_rect = vp.rect() if (vp and hasattr(vp, "rect")) else QRect(0, 0, 10000, 10000)
 
-        # Offset by +22px, +22px so the mouse cursor never collides with the tooltip window!
-        offset_pos = self._last_global_pos + QPoint(22, 22)
-        tolerance_rect = QRect(
-            self._last_screen_pos.x() - 15,
-            self._last_screen_pos.y() - 15,
-            30,
-            30,
-        )
-        vp = self.canvas.viewport() if self.canvas else self.canvas
-        # Show for 30000 ms (30 seconds) instead of disappearing immediately!
-        QToolTip.showText(offset_pos, display_html, vp, tolerance_rect, 30000)
+        display_html = html_content.replace('</table>', f'{footer}</table>')
+        # Show for 60 seconds
+        QToolTip.showText(offset_pos, display_html, vp, tolerance_rect, 60000)

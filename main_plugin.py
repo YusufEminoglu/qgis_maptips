@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import contextlib
 import os
+from typing import Optional
 
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtGui import QAction, QIcon
@@ -22,9 +23,11 @@ class QgisMapTipsPlugin:
         self.iface = iface
         self.plugin_dir = os.path.dirname(__file__)
         self.action = None
+        self.cadastre_action = None
         self.about_action = None
         self.dock = None
         self.provider = None
+        self.cadastre_tool = None
 
     def initProcessing(self) -> None:
         if self.provider is not None:
@@ -44,18 +47,55 @@ class QgisMapTipsPlugin:
         icon_path = os.path.join(self.plugin_dir, "icons", "icon.png")
         icon = QIcon(icon_path)
 
-        self.action = QAction(icon, "Qgis Advanced Map Tips&Actions", self.iface.mainWindow())
+        # 1. Main Studio Toggle Action
+        self.action = QAction(icon, "Qgis Advanced Map Tips&Actions Studio", self.iface.mainWindow())
         self.action.setCheckable(True)
         self.action.triggered.connect(self._toggle_dock)
-
         self.iface.addPluginToMenu(self.MENU_NAME, self.action)
         self.iface.addToolBarIcon(self.action)
 
+        # 2. Interactive Canvas Cadastre Picker Action (Turkey Only, menu only - no toolbar icon)
+        self.cadastre_action = QAction(
+            "⚡ TKGM Canvas Cadastre Picker (Turkey Only)",
+            self.iface.mainWindow(),
+        )
+        self.cadastre_action.setCheckable(True)
+        self.cadastre_action.setToolTip(
+            "Click anywhere on the map canvas to query and download the official cadastral parcel polygon (No layer needed, Turkey only)"
+        )
+        self.cadastre_action.triggered.connect(self._toggle_cadastre_tool)
+        self.iface.addPluginToMenu(self.MENU_NAME, self.cadastre_action)
+
+        # Sync tool active state with canvas
+        canvas = self.iface.mapCanvas() if hasattr(self.iface, "mapCanvas") else None
+        if canvas and hasattr(canvas, "mapToolSet"):
+            with contextlib.suppress(Exception):
+                canvas.mapToolSet.connect(self._on_map_tool_changed)
+
+        # 3. About Action
         self.about_action = QAction("About Qgis Advanced Map Tips&Actions", self.iface.mainWindow())
         self.about_action.triggered.connect(self._show_about)
         self.iface.addPluginToMenu(self.MENU_NAME, self.about_action)
 
     def unload(self) -> None:
+        canvas = self.iface.mapCanvas() if self.iface and hasattr(self.iface, "mapCanvas") else None
+        if canvas and hasattr(canvas, "mapToolSet"):
+            with contextlib.suppress(Exception):
+                canvas.mapToolSet.disconnect(self._on_map_tool_changed)
+
+        if self.cadastre_tool is not None:
+            if canvas and canvas.mapTool() == self.cadastre_tool:
+                canvas.unsetMapTool(self.cadastre_tool)
+            self.cadastre_tool = None
+
+        if self.cadastre_action is not None:
+            self.iface.removePluginMenu(self.MENU_NAME, self.cadastre_action)
+            with contextlib.suppress(TypeError):
+                self.cadastre_action.triggered.disconnect(self._toggle_cadastre_tool)
+            self.cadastre_action.setParent(None)
+            self.cadastre_action.deleteLater()
+            self.cadastre_action = None
+
         if self.dock is not None:
             self.dock.unload()
             self.iface.removeDockWidget(self.dock)
@@ -84,9 +124,59 @@ class QgisMapTipsPlugin:
             QgsApplication.processingRegistry().removeProvider(self.provider)
             self.provider = None
 
+    def toggle_cadastre_tool(self, enable: Optional[bool] = None) -> None:
+        """Programmatic toggle for the canvas cadastre tool."""
+        canvas = self.iface.mapCanvas() if self.iface else None
+        if not canvas:
+            return
+
+        target_state = (not (canvas.mapTool() == self.cadastre_tool)) if enable is None else bool(enable)
+        self._toggle_cadastre_tool(target_state)
+
+    def _toggle_cadastre_tool(self, checked: bool) -> None:
+        canvas = self.iface.mapCanvas() if self.iface else None
+        if not canvas:
+            return
+
+        if checked:
+            if self.cadastre_tool is None:
+                from .core.cadastre_tool import InteractiveCadastreTool
+                self.cadastre_tool = InteractiveCadastreTool(canvas, self.iface)
+                if hasattr(self.cadastre_tool, "deactivated"):
+                    self.cadastre_tool.deactivated.connect(self._on_cadastre_tool_deactivated)
+            canvas.setMapTool(self.cadastre_tool)
+            if self.cadastre_action and not self.cadastre_action.isChecked():
+                self.cadastre_action.setChecked(True)
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushInfo(
+                    "TKGM Cadastre Picker",
+                    "🎯 Canvas Cadastre Picker Active: Click anywhere on map canvas (over satellite basemap or blank) to download parcel.",
+                )
+        else:
+            if self.cadastre_tool and canvas.mapTool() == self.cadastre_tool:
+                canvas.unsetMapTool(self.cadastre_tool)
+            if self.cadastre_action and self.cadastre_action.isChecked():
+                self.cadastre_action.setChecked(False)
+
+        if self.dock and hasattr(self.dock, "sync_cadastre_tool_state"):
+            self.dock.sync_cadastre_tool_state(checked)
+
+    def _on_cadastre_tool_deactivated(self) -> None:
+        if self.cadastre_action and self.cadastre_action.isChecked():
+            self.cadastre_action.setChecked(False)
+        if self.dock and hasattr(self.dock, "sync_cadastre_tool_state"):
+            self.dock.sync_cadastre_tool_state(False)
+
+    def _on_map_tool_changed(self, new_tool) -> None:
+        is_ours = bool(self.cadastre_tool and new_tool == self.cadastre_tool)
+        if self.cadastre_action and self.cadastre_action.isChecked() != is_ours:
+            self.cadastre_action.setChecked(is_ours)
+        if self.dock and hasattr(self.dock, "sync_cadastre_tool_state"):
+            self.dock.sync_cadastre_tool_state(is_ours)
+
     def _toggle_dock(self, visible: bool) -> None:
         if self.dock is None:
-            self.dock = QgisMapTipsDock(self.iface, self.iface.mainWindow())
+            self.dock = QgisMapTipsDock(self.iface, self.iface.mainWindow(), plugin=self)
             self.dock.visibilityChanged.connect(self.action.setChecked)
             self.iface.addDockWidget(
                 Qt.DockWidgetArea.RightDockWidgetArea,
@@ -107,8 +197,21 @@ class QgisMapTipsPlugin:
             "<h3>Qgis Advanced Map Tips&Actions</h3>"
             "<p><b>Version:</b> 0.1.0<br/>"
             "<b>Author:</b> Yusuf Eminoğlu<br/>"
+            "<b>Repository:</b> <a href='https://gitlab.com/geophilo1/qgis_maptips'>https://gitlab.com/geophilo1/qgis_maptips</a> (GitLab)<br/>"
+            "<b>Issues:</b> <a href='https://gitlab.com/geophilo1/qgis_maptips/-/issues'>GitLab Issues</a><br/>"
             "<b>License:</b> GPL-3.0-or-later</p>"
             "<p>Design responsive Qt-safe HTML cards, zero-dependency micro-charts "
             "(progress bars, SVG donuts, sparklines), conditional status badges, "
-            "and 1-click dynamic web and spatial actions for vector and raster layers in QGIS 3.28+ and QGIS 4.</p>",
+            "and 1-click dynamic web and spatial actions for vector and raster layers in QGIS 3.28+ and QGIS 4.</p>"
+            "<hr/>"
+            "<p><b>🎯 Instant Canvas Cadastre Picker:</b> 1-click official TKGM MEGSİS parcel query and polygon "
+            "download directly from map canvas coordinates without selecting any vector layer (Turkey Only).</p>"
+            "<hr/>"
+            "<p><b>Special Thanks:</b> Sincere gratitude to "
+            "<a href='https://github.com/geographyclub'>geographyclub</a> "
+            "for creative inspiration on QGIS layout HTML styling, compact card aesthetics, and advanced attribute expressions; "
+            "and to <a href='https://github.com/okansafak/qgistkgmplugin'>Okan Şafak (qgistkgmplugin)</a> "
+            "for pioneering creative inspiration on 1-click canvas cadastre parcel downloading from TKGM MEGSİS.</p>"
+            "<p><b>Third-Party Notice:</b> MEGSİS cadastral queries are subject to fair-use rate limits and daily quotas (~100 queries/day). "
+            "See <code>THIRD_PARTY.md</code> for full terms and service policies.</p>",
         )

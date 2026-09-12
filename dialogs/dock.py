@@ -5,9 +5,10 @@ import contextlib
 import html
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
-from qgis.PyQt.QtCore import Qt, QTimer
+from qgis.PyQt.QtCore import Qt, QTimer, QUrl
+from qgis.PyQt.QtGui import QColor, QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -33,16 +34,27 @@ from qgis.PyQt.QtWidgets import (
     QWidget,
 )
 from qgis.core import (
+    QgsCoordinateReferenceSystem,
+    QgsCoordinateTransform,
     QgsExpression,
     QgsExpressionContext,
     QgsExpressionContextUtils,
+    QgsFeature,
+    QgsFeatureRequest,
+    QgsGeometry,
     QgsMapLayer,
+    QgsPointXY,
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
 )
 
-from ..core.action_builder import AVAILABLE_ACTIONS, apply_actions_to_layer
+from ..core.action_builder import (
+    AVAILABLE_ACTIONS,
+    apply_actions_to_layer,
+    get_layer_actions,
+    remove_all_actions,
+)
 from ..core.raster_hud import CanvasHoverHUD
 from ..core.template_engine import (
     PALETTES,
@@ -50,6 +62,8 @@ from ..core.template_engine import (
     TemplateConfig,
     compile_maptip_html,
 )
+from .collapsible import CollapsibleSection
+from .switch import IOSToggleSwitch
 from .theme import apply_adaptive_theme
 
 if TYPE_CHECKING:
@@ -59,15 +73,22 @@ if TYPE_CHECKING:
 class QgisMapTipsDock(QDockWidget):
     """Dockable studio for designing MapTips and managing layer actions."""
 
-    def __init__(self, iface: "QgisInterface", parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        iface: "QgisInterface",
+        parent: Optional[QWidget] = None,
+        plugin: Optional[Any] = None,
+    ) -> None:
         super().__init__("Qgis Advanced Map Tips&Actions", parent or iface.mainWindow())
         self.iface = iface
+        self.plugin = plugin
         self.canvas = iface.mapCanvas()
         self.setObjectName("QgisMapTipsDock")
         self.setAllowedAreas(Qt.DockWidgetArea.LeftDockWidgetArea | Qt.DockWidgetArea.RightDockWidgetArea)
 
         self._hud = CanvasHoverHUD(self.canvas, debounce_ms=250, parent=self)
         self._current_layer: Optional[QgsMapLayer] = None
+        self._cadastre_tool: Optional[Any] = None
 
         self._init_ui()
         apply_adaptive_theme(self)
@@ -96,26 +117,36 @@ class QgisMapTipsDock(QDockWidget):
         hero = QFrame()
         hero.setObjectName("heroPanel")
         hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(6, 6, 6, 6)
-        hero_layout.setSpacing(4)
+        hero_layout.setContentsMargins(8, 8, 8, 8)
+        hero_layout.setSpacing(5)
+
+        eyebrow_row = QHBoxLayout()
+        eyebrow = QLabel("HTML MAPTIPS & ACTIONS STUDIO")
+        eyebrow.setObjectName("heroEyebrow")
+        eyebrow_row.addWidget(eyebrow)
+        eyebrow_row.addStretch()
+        hero_layout.addLayout(eyebrow_row)
 
         top_row = QHBoxLayout()
-        title = QLabel("Qgis Advanced Map Tips&Actions")
+        title = QLabel("MapTips Studio")
         title.setObjectName("heroTitle")
 
-        self.toggle_maptips_btn = QPushButton("💡 MapTips: --")
-        self.toggle_maptips_btn.setCheckable(True)
-        self.toggle_maptips_btn.setToolTip("Quickly toggle QGIS Canvas MapTips visibility on or off")
-        self.toggle_maptips_btn.setStyleSheet(
-            "font-size: 8pt; font-weight: bold; background-color: #64748b; color: white; border-radius: 4px; padding: 2px 8px;"
-        )
-        self.toggle_maptips_btn.clicked.connect(self._toggle_canvas_maptips)
+        # Animated iOS Toggle Switch for MapTips
+        switch_box = QHBoxLayout()
+        switch_box.setSpacing(6)
+        self.maptips_switch_lbl = QLabel("MapTips")
+        self.maptips_switch_lbl.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #475569;")
+        self.maptips_switch = IOSToggleSwitch(default_on=True)
+        self.maptips_switch.setToolTip("Toggle QGIS Canvas MapTips visibility (Green: ON / Red: OFF)")
+        self.maptips_switch.toggled.connect(self._on_maptips_switch_toggled)
+        switch_box.addWidget(self.maptips_switch_lbl)
+        switch_box.addWidget(self.maptips_switch)
 
         badge = QLabel("PRO")
         badge.setObjectName("heroBadge")
         top_row.addWidget(title)
         top_row.addStretch()
-        top_row.addWidget(self.toggle_maptips_btn)
+        top_row.addLayout(switch_box)
         top_row.addWidget(badge)
         hero_layout.addLayout(top_row)
 
@@ -125,6 +156,7 @@ class QgisMapTipsDock(QDockWidget):
         self.layer_combo = QComboBox()
         self.layer_combo.currentIndexChanged.connect(self._on_target_layer_selected)
         self.refresh_btn = QPushButton("↻")
+        self.refresh_btn.setObjectName("quietButton")
         self.refresh_btn.setToolTip("Refresh layer list")
         self.refresh_btn.setFixedWidth(28)
         self.refresh_btn.clicked.connect(self._refresh_layers)
@@ -135,7 +167,7 @@ class QgisMapTipsDock(QDockWidget):
         hero_layout.addLayout(layer_row)
 
         self.layer_info_label = QLabel("Select a layer to start")
-        self.layer_info_label.setStyleSheet("font-size: 8pt; color: #64748b;")
+        self.layer_info_label.setObjectName("layerBadge")
         hero_layout.addWidget(self.layer_info_label)
 
         main_layout.addWidget(hero)
@@ -158,6 +190,7 @@ class QgisMapTipsDock(QDockWidget):
         self._build_hud_tab(tab_hud)
         self.tabs.addTab(tab_hud, "Live Canvas HUD")
 
+        self.tabs.currentChanged.connect(lambda _: self._sync_cursor_state())
         main_layout.addWidget(self.tabs, 1)
 
         self.setWidget(root)
@@ -174,7 +207,32 @@ class QgisMapTipsDock(QDockWidget):
         scroll_layout.setContentsMargins(4, 4, 4, 4)
         scroll_layout.setSpacing(6)
 
-        # Preset Toolbar
+        # 1. Quick Presets Chips Bar
+        chips_box = QHBoxLayout()
+        chips_box.setSpacing(4)
+        chips_lbl = QLabel("Quick Presets:")
+        chips_lbl.setStyleSheet("font-size: 8pt; font-weight: bold; color: #64748b;")
+        chips_box.addWidget(chips_lbl)
+
+        presets_quick = [
+            ("🏢 Real Estate", "kpi_real_estate.json"),
+            ("⚡ Capacity", "progress_capacity.json"),
+            ("🍩 Donut", "donut_shares.json"),
+            ("📈 Sparkline", "sparkline_timeline.json"),
+        ]
+        for title, pfile in presets_quick:
+            chip = QPushButton(title)
+            chip.setObjectName("presetChip")
+            cursor = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
+            if cursor is not None:
+                chip.setCursor(cursor)
+            chip.setToolTip(f"Instantly load {title} template")
+            chip.clicked.connect(lambda _, f=pfile: self._load_preset_by_file(f))
+            chips_box.addWidget(chip)
+        chips_box.addStretch()
+        scroll_layout.addLayout(chips_box)
+
+        # 2. Preset Toolbar
         preset_box = QHBoxLayout()
         preset_lbl = QLabel("Template Preset:")
         preset_lbl.setStyleSheet("font-size:8.5pt; font-weight:bold;")
@@ -199,7 +257,7 @@ class QgisMapTipsDock(QDockWidget):
         preset_box.addWidget(self.btn_load_preset)
         scroll_layout.addLayout(preset_box)
 
-        # Style & Layout Group
+        # 3. Core Style & Layout Model
         grp_style = QGroupBox("Layout & Color Palette")
         form_style = QFormLayout(grp_style)
 
@@ -210,7 +268,7 @@ class QgisMapTipsDock(QDockWidget):
         self.archetype_combo.addItem("SVG Sparkline Trend", Archetype.SPARKLINE)
         self.archetype_combo.addItem("Media / Photo Card", Archetype.MEDIA_CARD)
         self.archetype_combo.addItem("Clean Attribute Grid", Archetype.CLEAN_TABLE)
-        self.archetype_combo.currentIndexChanged.connect(self._update_preview)
+        self.archetype_combo.currentIndexChanged.connect(self._on_archetype_changed)
         form_style.addRow("Layout Model:", self.archetype_combo)
 
         self.palette_combo = QComboBox()
@@ -220,16 +278,22 @@ class QgisMapTipsDock(QDockWidget):
         form_style.addRow("Color Theme:", self.palette_combo)
 
         self.card_width_spin = QSpinBox()
-        self.card_width_spin.setRange(200, 600)
+        self.card_width_spin.setRange(180, 800)
+        self.card_width_spin.setSingleStep(10)
         self.card_width_spin.setValue(320)
         self.card_width_spin.setSuffix(" px")
         self.card_width_spin.valueChanged.connect(self._update_preview)
         form_style.addRow("Card Width:", self.card_width_spin)
 
+        self.cb_card_actions = QCheckBox("Show 1-Click Action Buttons Ribbon")
+        self.cb_card_actions.setChecked(True)
+        self.cb_card_actions.toggled.connect(self._update_preview)
+        form_style.addRow("Card Actions:", self.cb_card_actions)
+
         scroll_layout.addWidget(grp_style)
 
-        # Field Mapping Group
-        grp_fields = QGroupBox("Field Mappings")
+        # 4. Core Field Mapping Group
+        grp_fields = QGroupBox("Core Field Mappings")
         form_fields = QFormLayout(grp_fields)
 
         self.title_field_combo = QComboBox()
@@ -254,11 +318,48 @@ class QgisMapTipsDock(QDockWidget):
         self.kpi_unit_edit.textChanged.connect(self._update_preview)
         form_fields.addRow("KPI Unit:", self.kpi_unit_edit)
 
+        scroll_layout.addWidget(grp_fields)
+
+        # 5. Progressive Disclosure: Collapsible Advanced Options
+        self.adv_section = CollapsibleSection("⚙️ Advanced Metrics & Layout Options", initially_expanded=False)
+
+        # Card Dimensions & Media Group
+        grp_adv_layout = QGroupBox("Card Dimensions & Media")
+        form_adv_layout = QFormLayout(grp_adv_layout)
+
         self.media_field_combo = QComboBox()
         self.media_field_combo.currentIndexChanged.connect(self._update_preview)
-        form_fields.addRow("Media/Photo Field:", self.media_field_combo)
+        form_adv_layout.addRow("Media/Photo Field:", self.media_field_combo)
 
-        scroll_layout.addWidget(grp_fields)
+        self.combo_media_fallback = QComboBox()
+        self.combo_media_fallback.addItem("Show Modern SVG Placeholder", "placeholder")
+        self.combo_media_fallback.addItem("Collapse & Hide Row", "hide")
+        self.combo_media_fallback.currentIndexChanged.connect(self._update_preview)
+        form_adv_layout.addRow("Missing Photo Fallback:", self.combo_media_fallback)
+
+        self.adv_section.add_widget(grp_adv_layout)
+
+        # Resilient Data Formatting Group
+        grp_formatting = QGroupBox("Smart Formatting & Missing Values")
+        form_fmt = QFormLayout(grp_formatting)
+
+        self.cb_format_numbers = QCheckBox("Format Numbers with Separators (e.g. 1,250)")
+        self.cb_format_numbers.setChecked(True)
+        self.cb_format_numbers.toggled.connect(self._update_preview)
+        form_fmt.addRow("", self.cb_format_numbers)
+
+        self.spin_decimals = QSpinBox()
+        self.spin_decimals.setRange(0, 6)
+        self.spin_decimals.setValue(2)
+        self.spin_decimals.setSuffix(" decimals")
+        self.spin_decimals.valueChanged.connect(self._update_preview)
+        form_fmt.addRow("Float Decimals:", self.spin_decimals)
+
+        self.edit_null_text = QLineEdit("—")
+        self.edit_null_text.textChanged.connect(self._update_preview)
+        form_fmt.addRow("Missing/Null Fallback:", self.edit_null_text)
+
+        self.adv_section.add_widget(grp_formatting)
 
         # Conditional Formatting Group (Traffic-Light Badges)
         grp_cond = QGroupBox("Conditional Status Badge (Traffic Light)")
@@ -290,7 +391,7 @@ class QgisMapTipsDock(QDockWidget):
         lbl_row.addWidget(self.cond_lbl_false)
         form_cond.addRow("Labels (True / False):", lbl_row)
 
-        scroll_layout.addWidget(grp_cond)
+        self.adv_section.add_widget(grp_cond)
 
         # Relational / Cross-Layer Spatial Metrics
         grp_rel = QGroupBox("Cross-Layer Relational Metric")
@@ -314,7 +415,7 @@ class QgisMapTipsDock(QDockWidget):
         self.rel_label_edit.textChanged.connect(self._update_preview)
         form_rel.addRow("Metric Label:", self.rel_label_edit)
 
-        scroll_layout.addWidget(grp_rel)
+        self.adv_section.add_widget(grp_rel)
 
         # Attribute Checklist
         grp_attrs = QGroupBox("Detail Attributes (Checked to include)")
@@ -323,16 +424,49 @@ class QgisMapTipsDock(QDockWidget):
         self.attrs_list.setMaximumHeight(130)
         self.attrs_list.itemChanged.connect(self._update_preview)
         attr_layout.addWidget(self.attrs_list)
-        scroll_layout.addWidget(grp_attrs)
+        self.adv_section.add_widget(grp_attrs)
+
+        scroll_layout.addWidget(self.adv_section)
 
         # Live Preview Group
         grp_preview = QGroupBox("Live Preview & Expression Code")
         prev_layout = QVBoxLayout(grp_preview)
 
+        # Sample Feature Navigator
+        nav_row = QHBoxLayout()
+        nav_row.setSpacing(4)
+        self.btn_prev_feat = QPushButton("◀ Prev")
+        self.btn_prev_feat.setObjectName("quietButton")
+        self.btn_prev_feat.setToolTip("Preview with previous feature in layer")
+        self.btn_prev_feat.clicked.connect(self._nav_prev_feature)
+
+        self.feat_nav_lbl = QLabel("Sample Feature: 1")
+        self.feat_nav_lbl.setStyleSheet("font-size: 8pt; font-weight: 600; color: #64748b;")
+        align_center = getattr(getattr(Qt, "AlignmentFlag", Qt), "AlignCenter", 0)
+        self.feat_nav_lbl.setAlignment(align_center)
+
+        self.btn_next_feat = QPushButton("Next ▶")
+        self.btn_next_feat.setObjectName("quietButton")
+        self.btn_next_feat.setToolTip("Preview with next feature in layer")
+        self.btn_next_feat.clicked.connect(self._nav_next_feature)
+
+        self.btn_cycle_feat = QPushButton("🔀 Cycle")
+        self.btn_cycle_feat.setObjectName("quietButton")
+        self.btn_cycle_feat.setToolTip("Jump across sample features")
+        self.btn_cycle_feat.clicked.connect(self._nav_cycle_feature)
+
+        nav_row.addWidget(self.btn_prev_feat)
+        nav_row.addWidget(self.feat_nav_lbl, 1)
+        nav_row.addWidget(self.btn_next_feat)
+        nav_row.addWidget(self.btn_cycle_feat)
+        prev_layout.addLayout(nav_row)
+
         self.preview_tabs = QTabWidget()
         self.preview_box = QTextBrowser()
         self.preview_box.setObjectName("previewBox")
         self.preview_box.setMinimumHeight(180)
+        self.preview_box.setOpenLinks(False)
+        self.preview_box.anchorClicked.connect(self._on_preview_link_clicked)
         self.preview_tabs.addTab(self.preview_box, "Rendered Card")
 
         self.expr_box = QPlainTextEdit()
@@ -362,11 +496,11 @@ class QgisMapTipsDock(QDockWidget):
 
         # Bottom Action Buttons
         btn_layout = QHBoxLayout()
-        self.apply_btn = QPushButton("Apply MapTip to Layer")
+        self.apply_btn = QPushButton("🚀 Apply MapTip to Layer")
         self.apply_btn.setObjectName("primaryAction")
         self.apply_btn.clicked.connect(self._apply_maptip_to_layer)
 
-        self.clear_btn = QPushButton("Clear MapTip")
+        self.clear_btn = QPushButton("🗑️ Clear MapTip")
         self.clear_btn.setObjectName("secondaryAction")
         self.clear_btn.clicked.connect(self._clear_maptip_from_layer)
 
@@ -375,14 +509,21 @@ class QgisMapTipsDock(QDockWidget):
         layout.addLayout(btn_layout)
 
     def _build_actions_tab(self, parent: QWidget) -> None:
-        layout = QVBoxLayout(parent)
+        outer_layout = QVBoxLayout(parent)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(8)
 
         info = QLabel(
             "Select 1-click actions to inject into the active vector layer. "
             "Actions use dynamic CRS transformation, point-on-surface calculation, "
-            "and cross-layer spatial selection."
+            "and are available on the canvas, in forms, attribute tables, and MapTip cards."
         )
         info.setWordWrap(True)
         info.setStyleSheet("font-size: 8.5pt; color: #475569;")
@@ -395,7 +536,7 @@ class QgisMapTipsDock(QDockWidget):
         self.action_checkboxes: dict[str, QCheckBox] = {}
         for item in AVAILABLE_ACTIONS:
             cb = QCheckBox(f"{item['name']} — {item['description']}")
-            cb.setChecked(item["key"] in ("google_satellite", "google_streetview", "copy_clipboard", "export_card_report"))
+            cb.setChecked(item["key"] in ("google_satellite", "google_streetview", "tkgm_cadastre", "copy_clipboard", "export_card_report"))
             act_layout.addWidget(cb)
             self.action_checkboxes[item["key"]] = cb
 
@@ -416,12 +557,113 @@ class QgisMapTipsDock(QDockWidget):
         act_layout.addLayout(sel_box)
 
         layout.addWidget(grp_actions)
-        layout.addStretch()
 
-        self.inject_actions_btn = QPushButton("Inject Selected Actions into Layer")
+        self.inject_actions_btn = QPushButton("⚡ Inject Selected Actions into Layer")
         self.inject_actions_btn.setObjectName("primaryAction")
         self.inject_actions_btn.clicked.connect(self._apply_actions)
         layout.addWidget(self.inject_actions_btn)
+
+        # Live Layer Actions Inventory
+        grp_inventory = QGroupBox("Layer Actions Inventory (Active on Layer)")
+        inv_layout = QVBoxLayout(grp_inventory)
+        inv_layout.setSpacing(6)
+
+        self.active_actions_header = QLabel("No active actions on current layer")
+        self.active_actions_header.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #0f766e;")
+        inv_layout.addWidget(self.active_actions_header)
+
+        self.active_actions_list = QListWidget()
+        self.active_actions_list.setMinimumHeight(100)
+        self.active_actions_list.setStyleSheet(
+            "QListWidget { border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; padding: 2px; }"
+            "QListWidget::item { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; }"
+            "QListWidget::item:selected { background: #0f766e; color: #ffffff; border-radius: 3px; }"
+        )
+        inv_layout.addWidget(self.active_actions_list)
+
+        inv_btn_row = QHBoxLayout()
+        self.btn_run_action = QPushButton("▶ Run on Feature")
+        self.btn_run_action.setToolTip("Run selected action using the current sample feature")
+        self.btn_run_action.clicked.connect(self._on_run_selected_action)
+
+        self.btn_activate_qgis_tool = QPushButton("🎯 Activate QGIS Tool")
+        self.btn_activate_qgis_tool.setToolTip("Activate QGIS canvas 'Run Feature Action' tool to click map features")
+        self.btn_activate_qgis_tool.clicked.connect(self._on_activate_qgis_action_tool)
+
+        self.btn_clear_actions = QPushButton("🗑 Clear Actions")
+        self.btn_clear_actions.setToolTip("Remove actions from the active layer")
+        self.btn_clear_actions.clicked.connect(self._on_clear_layer_actions)
+
+        inv_btn_row.addWidget(self.btn_run_action)
+        inv_btn_row.addWidget(self.btn_activate_qgis_tool)
+        inv_btn_row.addWidget(self.btn_clear_actions)
+        inv_layout.addLayout(inv_btn_row)
+
+        layout.addWidget(grp_inventory)
+
+        # Compact Canvas Cadastre Strip under Actions (Turkey Only)
+        cadastre_strip = QFrame()
+        cadastre_strip.setObjectName("cadastreCompactStrip")
+        cadastre_strip.setStyleSheet(
+            "QFrame#cadastreCompactStrip { background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 2px 5px; }"
+        )
+        cad_layout = QHBoxLayout(cadastre_strip)
+        cad_layout.setContentsMargins(3, 1, 3, 1)
+        cad_layout.setSpacing(5)
+
+        tr_badge = QLabel("🇹🇷 TR")
+        tr_badge.setStyleSheet(
+            "background: #dc2626; color: #ffffff; font-weight: bold; font-size: 7pt; border-radius: 2px; padding: 1px 3px;"
+        )
+        tr_badge.setToolTip("Republic of Turkey Cadastral Coverage Only (TKGM MEGSİS)")
+
+        cad_lbl = QLabel("<b>Canvas Cadastre:</b>")
+        cad_lbl.setStyleSheet("font-size: 8pt; color: #78350f;")
+
+        self.btn_canvas_cadastre = QPushButton("⚡ Click Canvas to Download")
+        self.btn_canvas_cadastre.setObjectName("amberCompact")
+        self.btn_canvas_cadastre.setToolTip(
+            "Click anywhere on map canvas to query and download the parcel polygon into QGIS without selecting a layer (Turkey Only, ~100 daily fair-use quota)"
+        )
+        self.btn_canvas_cadastre.setStyleSheet(
+            "QPushButton { background: #d97706; color: #ffffff; font-weight: bold; border-radius: 3px; padding: 3px 8px; font-size: 8pt; }"
+            "QPushButton:hover { background: #b45309; }"
+        )
+        cursor_hand = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
+        if cursor_hand is not None:
+            self.btn_canvas_cadastre.setCursor(cursor_hand)
+        self.btn_canvas_cadastre.clicked.connect(self._toggle_canvas_cadastre_tool)
+
+        cad_layout.addWidget(tr_badge)
+        cad_layout.addWidget(cad_lbl)
+        cad_layout.addWidget(self.btn_canvas_cadastre, 1)
+        layout.addWidget(cadastre_strip)
+
+        # Helpful usage guide card
+        guide_box = QFrame()
+        guide_box.setStyleSheet(
+            "QFrame { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px; }"
+        )
+        guide_layout = QVBoxLayout(guide_box)
+        guide_layout.setContentsMargins(6, 6, 6, 6)
+        guide_layout.setSpacing(3)
+        guide_title = QLabel("💡 3 Ways to Execute Layer Actions in QGIS:")
+        guide_title.setStyleSheet("font-weight: bold; font-size: 8.5pt; color: #1e293b;")
+        guide_item1 = QLabel("1. <b>Inside MapTip Card:</b> Hover over feature on canvas, click action pills directly.")
+        guide_item1.setStyleSheet("font-size: 8pt; color: #475569;")
+        guide_item2 = QLabel("2. <b>On Canvas:</b> Click '🎯 Activate QGIS Tool' (yellow gear) and click any feature.")
+        guide_item2.setStyleSheet("font-size: 8pt; color: #475569;")
+        guide_item3 = QLabel("3. <b>In Tables:</b> Right-click any row in the Attribute Table or Identify dialog.")
+        guide_item3.setStyleSheet("font-size: 8pt; color: #475569;")
+        guide_layout.addWidget(guide_title)
+        guide_layout.addWidget(guide_item1)
+        guide_layout.addWidget(guide_item2)
+        guide_layout.addWidget(guide_item3)
+        layout.addWidget(guide_box)
+
+        layout.addStretch()
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll)
 
     def _build_hud_tab(self, parent: QWidget) -> None:
         layout = QVBoxLayout(parent)
@@ -440,9 +682,16 @@ class QgisMapTipsDock(QDockWidget):
         grp_hud = QGroupBox("HUD Inspection Controls")
         form_hud = QFormLayout(grp_hud)
 
-        self.hud_enable_cb = QCheckBox("Enable Live Canvas Hover HUD")
-        self.hud_enable_cb.toggled.connect(self._toggle_hud)
-        form_hud.addRow("", self.hud_enable_cb)
+        hud_switch_row = QHBoxLayout()
+        hud_switch_lbl = QLabel("Live Canvas HUD Active:")
+        hud_switch_lbl.setStyleSheet("font-weight: bold; font-size: 9pt;")
+        self.hud_switch = IOSToggleSwitch(default_on=False)
+        self.hud_switch.setToolTip("Activate real-time raster & vector HUD inspection on canvas hover")
+        self.hud_switch.toggled.connect(self._toggle_hud)
+        hud_switch_row.addWidget(hud_switch_lbl)
+        hud_switch_row.addStretch()
+        hud_switch_row.addWidget(self.hud_switch)
+        form_hud.addRow(hud_switch_row)
 
         self.hud_cursor_cb = QCheckBox("Use Precision Reticle Cursor on Canvas")
         self.hud_cursor_cb.setChecked(True)
@@ -560,11 +809,13 @@ class QgisMapTipsDock(QDockWidget):
             )
             self._populate_vector_fields(layer)
             self._hud.set_vector_layer(layer)
+            self._refresh_active_actions_list()
         elif isinstance(layer, QgsRasterLayer):
             self.layer_info_label.setText(
                 f"Raster · {layer.bandCount()} bands · {layer.width()}x{layer.height()} · CRS: {layer.crs().authid()}"
             )
             self._hud.set_active_raster(layer)
+            self._refresh_active_actions_list()
 
         self._update_preview()
 
@@ -596,6 +847,26 @@ class QgisMapTipsDock(QDockWidget):
             item.setCheckState(Qt.CheckState.Checked)
             self.attrs_list.addItem(item)
 
+        # Cache sample features for responsive live card testing
+        self._sample_features = []
+        self._sample_feat_index = 0
+        with contextlib.suppress(Exception):
+            req = QgsFeatureRequest()
+            if hasattr(QgsFeatureRequest, "Flag") and hasattr(QgsFeatureRequest.Flag, "NoGeometry"):
+                req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
+            elif hasattr(QgsFeatureRequest, "NoGeometry"):
+                req.setFlags(QgsFeatureRequest.NoGeometry)
+            req.setLimit(50)
+            for feat in layer.getFeatures(req):
+                self._sample_features.append(feat)
+
+        if not self._sample_features:
+            with contextlib.suppress(Exception):
+                for i, feat in enumerate(layer.getFeatures()):
+                    self._sample_features.append(feat)
+                    if i >= 49:
+                        break
+
         for name in fields.names():
             nl = name.lower()
             if any(k in nl for k in ("ad", "name", "title", "id", "label")):
@@ -604,15 +875,43 @@ class QgisMapTipsDock(QDockWidget):
 
         for name in fields.names():
             nl = name.lower()
-            if any(k in nl for k in ("tip", "tur", "type", "fonksiyon", "class", "kat")):
+            if any(k in nl for k in ("tip", "tur", "type", "fonksiyon", "class", "kat", "status", "kategori")):
                 self.sub_field_combo.setCurrentText(name)
                 break
 
         for name in fields.names():
             nl = name.lower()
-            if any(k in nl for k in ("alan", "area", "skor", "score", "fiyat", "deger", "count")):
+            if any(k in nl for k in ("alan", "area", "skor", "score", "fiyat", "price", "deger", "count", "kapasite", "capacity", "nufus", "pop")):
                 self.kpi_field_combo.setCurrentText(name)
                 self.cond_field_combo.setCurrentText(name)
+                if not self.kpi_label_edit.text():
+                    if any(k in nl for k in ("alan", "area")):
+                        self.kpi_label_edit.setText("Surface Area")
+                        self.kpi_unit_edit.setText("m²")
+                    elif any(k in nl for k in ("fiyat", "price", "deger")):
+                        self.kpi_label_edit.setText("Market Valuation")
+                        self.kpi_unit_edit.setText("$")
+                    elif any(k in nl for k in ("kapasite", "capacity")):
+                        self.kpi_label_edit.setText("Capacity")
+                        self.kpi_unit_edit.setText("units")
+                    elif any(k in nl for k in ("nufus", "pop")):
+                        self.kpi_label_edit.setText("Population")
+                        self.kpi_unit_edit.setText("inh.")
+                    elif any(k in nl for k in ("skor", "score")):
+                        self.kpi_label_edit.setText("Index Score")
+                        self.kpi_unit_edit.setText("pts")
+                break
+
+        for name in fields.names():
+            nl = name.lower()
+            if any(k in nl for k in ("foto", "photo", "image", "resim", "img", "media", "url")):
+                self.media_field_combo.setCurrentText(name)
+                break
+
+        for name in fields.names():
+            nl = name.lower()
+            if any(k in nl for k in ("file", "dosya", "doc", "pdf", "link", "url", "web")):
+                self.file_field_combo.setCurrentText(name)
                 break
 
         for cb in combos:
@@ -668,11 +967,57 @@ class QgisMapTipsDock(QDockWidget):
                     attrs.append((fld, fld))
         config.attribute_fields = attrs
 
+        # Donut Chart
+        if config.archetype == Archetype.DONUT_CHART:
+            if getattr(self, "_preset_donut_fields", None):
+                config.donut_fields = self._preset_donut_fields
+            elif attrs:
+                donut_palette = ["#10b981", "#3b82f6", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4"]
+                config.donut_fields = [
+                    (fld, lbl or fld, donut_palette[i % len(donut_palette)])
+                    for i, (fld, lbl) in enumerate(attrs[:5])
+                ]
+
         # Sparklines
         if config.archetype == Archetype.SPARKLINE:
-            config.sparkline_fields = [fld for fld, _ in attrs[:5]]
+            if getattr(self, "_preset_sparkline_fields", None):
+                config.sparkline_fields = self._preset_sparkline_fields
+            else:
+                config.sparkline_fields = [fld for fld, _ in attrs[:6]]
+
+        config.format_numbers = self.cb_format_numbers.isChecked()
+        config.decimal_places = self.spin_decimals.value()
+        config.null_text = self.edit_null_text.text().strip() or "—"
+        config.media_fallback = self.combo_media_fallback.currentData() or "placeholder"
+        config.show_action_buttons = self.cb_card_actions.isChecked()
+        if hasattr(self, "action_checkboxes"):
+            config.card_action_keys = [k for k, cb in self.action_checkboxes.items() if cb.isChecked()]
 
         return config
+
+    def _on_archetype_changed(self) -> None:
+        arch = self.archetype_combo.currentData()
+        if arch != Archetype.DONUT_CHART:
+            self._preset_donut_fields = None
+        if arch != Archetype.SPARKLINE:
+            self._preset_sparkline_fields = None
+        self._update_preview()
+
+    def _nav_prev_feature(self) -> None:
+        if getattr(self, "_sample_features", []):
+            self._sample_feat_index = (self._sample_feat_index - 1) % len(self._sample_features)
+            self._update_preview()
+
+    def _nav_next_feature(self) -> None:
+        if getattr(self, "_sample_features", []):
+            self._sample_feat_index = (self._sample_feat_index + 1) % len(self._sample_features)
+            self._update_preview()
+
+    def _nav_cycle_feature(self) -> None:
+        if getattr(self, "_sample_features", []):
+            jump = max(1, len(self._sample_features) // 4)
+            self._sample_feat_index = (self._sample_feat_index + jump) % len(self._sample_features)
+            self._update_preview()
 
     def _update_preview(self) -> None:
         config = self._build_config_from_ui()
@@ -686,20 +1031,79 @@ class QgisMapTipsDock(QDockWidget):
             selected = self._current_layer.selectedFeatures()
             if selected:
                 sample_feature = selected[0]
+                if hasattr(self, "feat_nav_lbl"):
+                    self.feat_nav_lbl.setText(f"Selected (ID: {sample_feature.id()})")
+            elif getattr(self, "_sample_features", []):
+                idx = max(0, min(getattr(self, "_sample_feat_index", 0), len(self._sample_features) - 1))
+                sample_feature = self._sample_features[idx]
+                if hasattr(self, "feat_nav_lbl"):
+                    self.feat_nav_lbl.setText(f"Feature {idx + 1} of {len(self._sample_features)} (ID: {sample_feature.id()})")
             else:
-                for feat in self._current_layer.getFeatures():
-                    sample_feature = feat
-                    break
+                with contextlib.suppress(Exception):
+                    req = QgsFeatureRequest()
+                    if hasattr(QgsFeatureRequest, "Flag") and hasattr(QgsFeatureRequest.Flag, "NoGeometry"):
+                        req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
+                    elif hasattr(QgsFeatureRequest, "NoGeometry"):
+                        req.setFlags(QgsFeatureRequest.NoGeometry)
+                    req.setLimit(1)
+                    for feat in self._current_layer.getFeatures(req):
+                        sample_feature = feat
+                        break
+                if not sample_feature:
+                    with contextlib.suppress(Exception):
+                        for feat in self._current_layer.getFeatures():
+                            sample_feature = feat
+                            break
+                if sample_feature and hasattr(self, "feat_nav_lbl"):
+                    self.feat_nav_lbl.setText(f"Feature ID: {sample_feature.id()}")
 
-            if sample_feature:
-                ctx = QgsExpressionContext()
-                ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(self._current_layer))
-                ctx.setFeature(sample_feature)
-                evaluated_html = QgsExpression.replaceExpressionText(raw_html, ctx)
-                self.preview_box.setHtml(evaluated_html)
-                return
+            # If layer has no features or features could not be read, synthesize a clean schema-matched mock feature
+            if not sample_feature:
+                mock_feat = QgsFeature(self._current_layer.fields())
+                mock_feat.setValid(True)
+                for f in self._current_layer.fields():
+                    fname = f.name()
+                    fn_lower = fname.lower()
+                    type_lower = f.typeName().lower()
+                    if any(k in fn_lower for k in ("id", "fid", "no", "kod", "code")):
+                        mock_feat.setAttribute(fname, 101)
+                    elif any(k in fn_lower for k in ("alan", "area", "uzunluk", "length", "boyut", "size", "m2", "metre")):
+                        mock_feat.setAttribute(fname, 254.50)
+                    elif any(k in fn_lower for k in ("tarih", "date", "time", "yil", "year")):
+                        mock_feat.setAttribute(fname, "2026-09-12")
+                    elif any(k in fn_lower for k in ("fiyat", "price", "deger", "val", "skor", "score", "oran", "rate")):
+                        mock_feat.setAttribute(fname, 85.0)
+                    elif any(k in fn_lower for k in ("foto", "photo", "image", "img", "url")):
+                        mock_feat.setAttribute(fname, "")
+                    elif "int" in type_lower or "long" in type_lower or "short" in type_lower:
+                        mock_feat.setAttribute(fname, 42)
+                    elif "double" in type_lower or "float" in type_lower or "real" in type_lower or "numeric" in type_lower:
+                        mock_feat.setAttribute(fname, 73.50)
+                    else:
+                        mock_feat.setAttribute(fname, f"Sample {fname}")
 
-        self.preview_box.setHtml(raw_html)
+                sample_feature = mock_feat
+                if hasattr(self, "feat_nav_lbl"):
+                    self.feat_nav_lbl.setText("Demo Sample (Layer has no records)")
+
+            self._current_sample_feat = sample_feature
+            ctx = QgsExpressionContext()
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(self._current_layer))
+            ctx.setFeature(sample_feature)
+            evaluated_html = QgsExpression.replaceExpressionText(raw_html, ctx)
+            centered_html = f'<div align="center" style="margin:4px auto; padding:2px;">{evaluated_html}</div>'
+            self.preview_box.setHtml(centered_html)
+            if hasattr(self, "preview_tabs"):
+                self.preview_tabs.setTabText(0, f"Rendered Card ({config.card_width} px)")
+            return
+
+        if hasattr(self, "feat_nav_lbl"):
+            self.feat_nav_lbl.setText("Template Demo Preview")
+        self._current_sample_feat = None
+        centered_html = f'<div align="center" style="margin:4px auto; padding:2px;">{raw_html}</div>'
+        self.preview_box.setHtml(centered_html)
+        if hasattr(self, "preview_tabs"):
+            self.preview_tabs.setTabText(0, f"Rendered Card ({config.card_width} px)")
 
     def _copy_html_to_clipboard(self) -> None:
         text = getattr(self, "_current_raw_html", "")
@@ -717,25 +1121,22 @@ class QgisMapTipsDock(QDockWidget):
             self.iface.actionMapTips().trigger()
             self._sync_maptip_action_state()
 
+    def _on_maptips_switch_toggled(self, checked: bool) -> None:
+        if hasattr(self.iface, "actionMapTips") and self.iface.actionMapTips():
+            action = self.iface.actionMapTips()
+            if action.isChecked() != checked:
+                action.trigger()
+        self._sync_cursor_state()
+
     def _sync_maptip_action_state(self, checked: Optional[bool] = None) -> None:
-        if not hasattr(self, "toggle_maptips_btn"):
+        if not hasattr(self, "maptips_switch"):
             return
         if not hasattr(self.iface, "actionMapTips") or not self.iface.actionMapTips():
-            self.toggle_maptips_btn.setEnabled(False)
-            self.toggle_maptips_btn.setText("💡 MapTips: N/A")
+            self.maptips_switch.setEnabled(False)
             return
         is_active = self.iface.actionMapTips().isChecked() if checked is None else checked
-        self.toggle_maptips_btn.setChecked(is_active)
-        if is_active:
-            self.toggle_maptips_btn.setText("💡 MapTips: ON")
-            self.toggle_maptips_btn.setStyleSheet(
-                "font-size: 8pt; font-weight: bold; background-color: #10b981; color: white; border-radius: 4px; padding: 2px 8px;"
-            )
-        else:
-            self.toggle_maptips_btn.setText("💡 MapTips: OFF")
-            self.toggle_maptips_btn.setStyleSheet(
-                "font-size: 8pt; font-weight: bold; background-color: #64748b; color: white; border-radius: 4px; padding: 2px 8px;"
-            )
+        self.maptips_switch.setCheckedSilently(is_active)
+        self._sync_cursor_state()
 
     def _apply_maptip_to_layer(self) -> None:
         if not isinstance(self._current_layer, QgsVectorLayer):
@@ -781,12 +1182,271 @@ class QgisMapTipsDock(QDockWidget):
             file_field=file_field,
             intersect_target_layer=intersect_tgt,
         )
+        self._refresh_active_actions_list()
+        self._update_preview()
+
+        # Synchronize layer MapTip card template if action ribbon is enabled
+        if self.cb_card_actions.isChecked():
+            with contextlib.suppress(Exception):
+                cfg = self._get_current_config()
+                html_text = compile_maptip_html(cfg)
+                self._current_layer.setMapTipTemplate(html_text)
+
+        msg = (
+            f"{count} actions added to layer '{self._current_layer.name()}'.\n"
+            f"Active scopes: Canvas, Feature, Field, Layer, Form."
+        )
         if hasattr(self.iface, "messageBar"):
-            self.iface.messageBar().pushSuccess(
-                "Qgis MapTips", f"{count} actions added to layer '{self._current_layer.name()}'."
+            self.iface.messageBar().pushSuccess("Qgis MapTips", msg)
+        else:
+            QMessageBox.information(self, "Qgis MapTips", msg)
+
+    def _refresh_active_actions_list(self) -> None:
+        if not hasattr(self, "active_actions_list"):
+            return
+        self.active_actions_list.clear()
+        if not isinstance(self._current_layer, QgsVectorLayer) or not self._current_layer.isValid():
+            self.active_actions_header.setText("Select a valid vector layer to view active actions")
+            return
+
+        actions = get_layer_actions(self._current_layer)
+        if not actions:
+            self.active_actions_header.setText(f"No actions currently attached to '{self._current_layer.name()}'. Click 'Inject' above.")
+            return
+
+        self.active_actions_header.setText(f"Active on '{self._current_layer.name()}' ({len(actions)} actions):")
+        for act in actions:
+            name_lower = act["name"].lower()
+            if "satellite" in name_lower or "google" in name_lower:
+                icon = "🌐"
+            elif "street" in name_lower:
+                icon = "📍"
+            elif "osm" in name_lower or "openstreet" in name_lower:
+                icon = "🗺️"
+            elif "yandex" in name_lower:
+                icon = "🧭"
+            elif "tkgm" in name_lower:
+                icon = "⚡" if ("hızlı" in name_lower or "instant" in name_lower or "0.2s" in name_lower) else "🏛️"
+            elif "clipboard" in name_lower or "copy" in name_lower:
+                icon = "📋"
+            elif "report" in name_lower:
+                icon = "📄"
+            elif "intersect" in name_lower:
+                icon = "🔗"
+            else:
+                icon = "⚡"
+
+            scopes = act.get("scopes", [])
+            scope_tag = f"[{', '.join(scopes)}]" if scopes else "[Canvas]"
+            item_text = f"{icon} {act['name']}  —  {scope_tag}"
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, act)
+            self.active_actions_list.addItem(item)
+
+    def _on_run_selected_action(self) -> None:
+        if not isinstance(self._current_layer, QgsVectorLayer):
+            QMessageBox.warning(self, "Qgis MapTips", "Please select a vector layer.")
+            return
+
+        selected_items = self.active_actions_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "Qgis MapTips", "Please select an action from the inventory list to test.")
+            return
+
+        act_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        feat = getattr(self, "_current_sample_feat", None)
+        if not feat:
+            with contextlib.suppress(Exception):
+                for f in self._current_layer.getFeatures():
+                    feat = f
+                    break
+
+        if not feat:
+            QMessageBox.warning(self, "Qgis MapTips", "No feature available to run action on.")
+            return
+
+        with contextlib.suppress(Exception):
+            self._current_layer.actions().doActionFeature(act_data["id"], feat)
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushSuccess(
+                    "Qgis MapTips", f"Executed '{act_data['name']}' on feature ID {feat.id()}."
+                )
+
+    def _on_activate_qgis_action_tool(self) -> None:
+        if hasattr(self.iface, "actionFeatureAction") and self.iface.actionFeatureAction():
+            self.iface.actionFeatureAction().trigger()
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushInfo(
+                    "Qgis MapTips", "QGIS 'Run Feature Action' tool activated! Click any feature on the canvas."
+                )
+        else:
+            QMessageBox.information(
+                self, "Qgis MapTips", "Click the yellow gear 'Run Feature Action' icon in your QGIS toolbar."
+            )
+
+    def _on_clear_layer_actions(self) -> None:
+        if not isinstance(self._current_layer, QgsVectorLayer):
+            return
+        count = remove_all_actions(self._current_layer)
+        self._refresh_active_actions_list()
+        if hasattr(self.iface, "messageBar"):
+            self.iface.messageBar().pushInfo(
+                "Qgis MapTips", f"Removed {count} actions from '{self._current_layer.name()}'."
+            )
+
+    def _toggle_canvas_cadastre_tool(self) -> None:
+        if self.plugin and hasattr(self.plugin, "toggle_cadastre_tool"):
+            self.plugin.toggle_cadastre_tool()
+        elif self.canvas:
+            from ..core.cadastre_tool import InteractiveCadastreTool
+            if self._cadastre_tool is None:
+                self._cadastre_tool = InteractiveCadastreTool(self.canvas, self.iface)
+            if self.canvas.mapTool() == self._cadastre_tool:
+                self.canvas.unsetMapTool(self._cadastre_tool)
+                self.sync_cadastre_tool_state(False)
+            else:
+                self.canvas.setMapTool(self._cadastre_tool)
+                self.sync_cadastre_tool_state(True)
+
+    def sync_cadastre_tool_state(self, active: bool) -> None:
+        if not hasattr(self, "btn_canvas_cadastre") or self.btn_canvas_cadastre is None:
+            return
+        if active:
+            self.btn_canvas_cadastre.setText("🟢 Active (Click Map)")
+            self.btn_canvas_cadastre.setStyleSheet(
+                "QPushButton { background: #059669; color: #ffffff; font-weight: bold; border-radius: 3px; padding: 3px 8px; font-size: 8pt; }"
+                "QPushButton:hover { background: #047857; }"
             )
         else:
-            QMessageBox.information(self, "Qgis MapTips", f"{count} actions added successfully!")
+            self.btn_canvas_cadastre.setText("⚡ Click Canvas to Download")
+            self.btn_canvas_cadastre.setStyleSheet(
+                "QPushButton { background: #d97706; color: #ffffff; font-weight: bold; border-radius: 3px; padding: 3px 8px; font-size: 8pt; }"
+                "QPushButton:hover { background: #b45309; }"
+            )
+
+    def _on_preview_link_clicked(self, url: QUrl) -> None:
+        url_str = url.toString()
+        if url_str.startswith("action:copy_clipboard"):
+            self._copy_attributes_of_sample_feature()
+        elif url_str.startswith("action:export_card_report"):
+            self._export_sample_card_report()
+        elif url_str.startswith("action:tkgm_cadastre") or url_str.startswith("action:tkgm_api_instant"):
+            self._run_sample_instant_tkgm()
+        elif url_str.startswith("action:"):
+            key = url_str.split(":", 1)[1]
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushInfo("Qgis MapTips", f"Action '{key}' clicked in preview.")
+        else:
+            QDesktopServices.openUrl(url)
+
+    def _copy_attributes_of_sample_feature(self) -> None:
+        feat = getattr(self, "_current_sample_feat", None)
+        layer = self._current_layer
+        if feat and isinstance(layer, QgsVectorLayer):
+            lines = [f"{field.name()}: {feat[field.name()]}" for field in layer.fields()]
+            QApplication.clipboard().setText("\n".join(lines))
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushSuccess("Qgis MapTips", "Feature attributes copied to clipboard.")
+            elif hasattr(self, "preview_status_lbl"):
+                self.preview_status_lbl.setText("Attributes copied!")
+        else:
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushWarning("Qgis MapTips", "No feature available to copy attributes from.")
+
+    def _export_sample_card_report(self) -> None:
+        import os, tempfile, webbrowser
+        feat = getattr(self, "_current_sample_feat", None)
+        layer = self._current_layer
+        raw_html = getattr(self, "_current_raw_html", "")
+        if not raw_html and isinstance(layer, QgsVectorLayer):
+            raw_html = layer.mapTipTemplate() or compile_maptip_html(self._build_config_from_ui())
+        if raw_html and feat and isinstance(layer, QgsVectorLayer):
+            ctx = QgsExpressionContext()
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+            ctx.setFeature(feat)
+            evaluated = QgsExpression.replaceExpressionText(raw_html, ctx)
+            full_html = (
+                '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Feature Card Report</title>'
+                '<style>body{font-family:Segoe UI, sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}'
+                '.card-wrap{box-shadow:0 10px 25px rgba(0,0,0,0.1);background:#fff;border-radius:6px;overflow:hidden;}'
+                '</style></head><body><div class="card-wrap">' + evaluated + '</div></body></html>'
+            )
+            tmp = os.path.join(tempfile.gettempdir(), f"feature_card_report_{feat.id()}.html")
+            with open(tmp, "w", encoding="utf-8") as f:
+                f.write(full_html)
+            webbrowser.open(f"file:///{tmp}")
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushSuccess("Qgis MapTips", "Opened standalone HTML report in browser.")
+
+    def _run_sample_instant_tkgm(self) -> None:
+        feat = getattr(self, "_current_sample_feat", None)
+        if not feat or not feat.hasGeometry() or not isinstance(self._current_layer, QgsVectorLayer):
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushWarning("TKGM Cadastre", "No sample feature with valid geometry found in selected layer.")
+            return
+
+        import datetime
+        from qgis.PyQt.QtNetwork import QNetworkRequest
+        from qgis.core import QgsNetworkAccessManager
+
+        try:
+            pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid()
+            pt = pos.asPoint()
+            tr = QgsCoordinateTransform(self._current_layer.crs(), QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
+            wgs = tr.transform(pt)
+            lat, lon = round(wgs.y(), 6), round(wgs.x(), 6)
+
+            url = f"https://cbsapi.tkgm.gov.tr/megsiswebapi.v3.1/api/parsel/{lat}/{lon}/"
+            req = QNetworkRequest(QUrl(url))
+            req.setRawHeader(b"User-Agent", b"Mozilla/5.0")
+            reply = QgsNetworkAccessManager.instance().blockingGet(req)
+            data = json.loads(reply.content().data().decode("utf-8"))
+            p = data.get("properties", {})
+            il = str(p.get("ilAd", "") or "")
+            ilce = str(p.get("ilceAd", "") or "")
+            mah = str(p.get("mahalleAd", "") or "")
+            ada = str(p.get("adaNo", "") or "")
+            parsel = str(p.get("parselNo", "") or "")
+            alan = str(p.get("alan", "") or "")
+            nitelik = str(p.get("nitelik", "") or "")
+            mevkii = str(p.get("mevkii", "") or "")
+            ozet = str(p.get("ozet", "") or f"{mah}-{ada}/{parsel}")
+
+            summary = f"TKGM: {il} / {ilce} / {mah} | Block: {ada}, Parcel: {parsel} | Area: {alan} m² | {nitelik}"
+            QApplication.clipboard().setText(summary)
+
+            coords = data.get("geometry", {}).get("coordinates", [])
+            if coords:
+                rings = [[QgsPointXY(c[0], c[1]) for c in ring] for ring in coords]
+                poly_geom = QgsGeometry.fromPolygonXY(rings)
+                t_layers = QgsProject.instance().mapLayersByName("TKGM Cadastre Parcels (TR)")
+                if t_layers:
+                    t_layer = t_layers[0]
+                else:
+                    uri = "Polygon?crs=EPSG:4326&field=province:string(50)&field=district:string(50)&field=neighborhood:string(50)&field=block_no:string(20)&field=parcel_no:string(20)&field=area_m2:double&field=land_type:string(100)&field=locality:string(100)&field=parcel_key:string(60)&field=query_date:string(30)"
+                    t_layer = QgsVectorLayer(uri, "TKGM Cadastre Parcels (TR)", "memory")
+                    sym = t_layer.renderer().symbol()
+                    if sym:
+                        sym.setColor(QColor(245, 158, 11, 45))
+                        sym.symbolLayer(0).setStrokeColor(QColor(217, 119, 6))
+                        sym.symbolLayer(0).setStrokeWidth(0.6)
+                    QgsProject.instance().addMapLayer(t_layer)
+
+                existing = {str(ft["parcel_key"]) for ft in t_layer.getFeatures() if ft["parcel_key"]}
+                if ozet not in existing:
+                    alan_val = float(alan.replace(",", "").strip() or 0.0) if alan else 0.0
+                    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
+                    f = QgsFeature(t_layer.fields())
+                    f.setGeometry(poly_geom)
+                    f.setAttributes([il, ilce, mah, ada, parsel, alan_val, nitelik, mevkii, ozet, now_str])
+                    t_layer.dataProvider().addFeatures([f])
+                    t_layer.triggerRepaint()
+
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushInfo("TKGM Cadastre", f"🏛️ {summary} (Copied to clipboard & added to layer)")
+        except Exception as exc:
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushWarning("TKGM Cadastre", f"TKGM query failed (no parcel found at coordinate or service unavailable): {exc}")
 
     def _on_preset_selected(self, index: int) -> None:
         preset_file = self.preset_combo.currentData()
@@ -798,6 +1458,17 @@ class QgisMapTipsDock(QDockWidget):
         if preset_path.exists():
             cfg = TemplateConfig.load_json(preset_path)
             self._apply_config_to_ui(cfg)
+
+    def _load_preset_by_file(self, filename: str) -> None:
+        idx = self.preset_combo.findData(filename)
+        if idx >= 0:
+            self.preset_combo.setCurrentIndex(idx)
+        else:
+            presets_dir = Path(__file__).resolve().parent.parent / "templates"
+            preset_path = presets_dir / filename
+            if preset_path.exists():
+                cfg = TemplateConfig.load_json(preset_path)
+                self._apply_config_to_ui(cfg)
 
     def _apply_config_to_ui(self, cfg: TemplateConfig) -> None:
         idx_arch = self.archetype_combo.findData(cfg.archetype)
@@ -813,6 +1484,34 @@ class QgisMapTipsDock(QDockWidget):
             self.kpi_label_edit.setText(cfg.kpi_label)
         if cfg.kpi_unit:
             self.kpi_unit_edit.setText(cfg.kpi_unit)
+
+        if hasattr(cfg, "format_numbers"):
+            self.cb_format_numbers.setChecked(cfg.format_numbers)
+        if hasattr(cfg, "decimal_places"):
+            self.spin_decimals.setValue(cfg.decimal_places)
+        if hasattr(cfg, "null_text") and cfg.null_text:
+            self.edit_null_text.setText(cfg.null_text)
+        if hasattr(cfg, "media_fallback") and cfg.media_fallback:
+            idx = self.combo_media_fallback.findData(cfg.media_fallback)
+            if idx >= 0:
+                self.combo_media_fallback.setCurrentIndex(idx)
+
+        if hasattr(cfg, "show_action_buttons"):
+            self.cb_card_actions.setChecked(cfg.show_action_buttons)
+        if hasattr(cfg, "card_action_keys") and cfg.card_action_keys and hasattr(self, "action_checkboxes"):
+            for k, cb in self.action_checkboxes.items():
+                cb.setChecked(k in cfg.card_action_keys)
+
+        # Retain preset donut and sparkline fields
+        if hasattr(cfg, "donut_fields") and cfg.donut_fields:
+            self._preset_donut_fields = cfg.donut_fields
+        else:
+            self._preset_donut_fields = None
+
+        if hasattr(cfg, "sparkline_fields") and cfg.sparkline_fields:
+            self._preset_sparkline_fields = cfg.sparkline_fields
+        else:
+            self._preset_sparkline_fields = None
 
         self._update_preview()
 
@@ -830,10 +1529,18 @@ class QgisMapTipsDock(QDockWidget):
             self._apply_config_to_ui(cfg)
 
     def _toggle_hud(self, checked: bool) -> None:
-        if checked:
-            self._hud.start()
-        else:
-            self._hud.stop()
+        self._hud.set_hud_mode(checked)
+        self._sync_cursor_state()
+
+    def _sync_cursor_state(self) -> None:
+        """Keep the canvas inspection reticle cursor active whenever MapTips or HUD is active."""
+        maptips_on = hasattr(self, "maptips_switch") and self.maptips_switch.isChecked()
+        hud_on = hasattr(self, "hud_switch") and self.hud_switch.isChecked()
+        current_tab = self.tabs.currentIndex() if hasattr(self, "tabs") else 0
+
+        # Enable reticle cursor if HUD is on, or if user is on MapTip Designer / HUD tab while MapTips is active
+        want_cursor = hud_on or (maptips_on and current_tab in (0, 2))
+        self._hud.set_cursor_mode(want_cursor)
 
     def _on_hud_composite_toggled(self, checked: bool) -> None:
         self._hud.set_composite_mode(checked)

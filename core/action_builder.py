@@ -12,9 +12,9 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from qgis.core import QgsVectorLayer
 
-# Dynamic WGS84 coordinates that automatically resolve layer CRS and guarantee point on surface
-LAT_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometry), centroid($geometry)), @layer_crs, 'EPSG:4326'), format_number(y(@wgs), 7)) %]"
-LON_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometry), centroid($geometry)), @layer_crs, 'EPSG:4326'), format_number(x(@wgs), 7)) %]"
+# Dynamic WGS84 coordinates that automatically resolve layer CRS, handle Turkish/European decimal commas, and guarantee point on surface
+LAT_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometry), centroid($geometry)), coalesce(@layer_crs, 'EPSG:4326'), 'EPSG:4326'), coalesce(to_string(round(y(@wgs), 6)), '0.0')) %]"
+LON_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometry), centroid($geometry)), coalesce(@layer_crs, 'EPSG:4326'), 'EPSG:4326'), coalesce(to_string(round(x(@wgs), 6)), '0.0')) %]"
 
 # Self-contained portable Python script for copying attributes to clipboard
 CLIPBOARD_PYTHON_CODE = (
@@ -47,6 +47,76 @@ EXPORT_CARD_REPORT_PYTHON_CODE = (
     "    tmp = os.path.join(tempfile.gettempdir(), f'feature_card_[% $id %].html'); "
     "    with open(tmp, 'w', encoding='utf-8') as f: f.write(full_html); "
     "    webbrowser.open(f'file:///{tmp}')"
+)
+
+# Instant MEGSIS Cadastral Query Python Action (0.2s API query + adds polygon layer + copies summary)
+TKGM_INSTANT_QUERY_PYTHON_CODE = (
+    "import datetime, json, contextlib; "
+    "from qgis.PyQt.QtCore import QUrl; "
+    "from qgis.PyQt.QtGui import QColor; "
+    "from qgis.PyQt.QtNetwork import QNetworkRequest; "
+    "from qgis.PyQt.QtWidgets import QApplication; "
+    "from qgis.core import (QgsProject, QgsCoordinateTransform, QgsCoordinateReferenceSystem, "
+    "QgsPointXY, QgsGeometry, QgsVectorLayer, QgsFeature, QgsNetworkAccessManager); "
+    "from qgis.utils import iface; "
+    "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
+    "feat = layer.getFeature([% $id %]) if layer else None; "
+    "lat, lon = 0.0, 0.0; "
+    "if feat and feat.hasGeometry(): "
+    "    pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid(); "
+    "    pt = pos.asPoint(); "
+    "    tr = QgsCoordinateTransform(layer.crs(), QgsCoordinateReferenceSystem('EPSG:4326'), QgsProject.instance()); "
+    "    wgs = tr.transform(pt); "
+    "    lat, lon = round(wgs.y(), 6), round(wgs.x(), 6); "
+    "if lat and lon: "
+    "    try: "
+    "        url = f'https://cbsapi.tkgm.gov.tr/megsiswebapi.v3.1/api/parsel/{lat}/{lon}/'; "
+    "        req = QNetworkRequest(QUrl(url)); "
+    "        req.setRawHeader(b'User-Agent', b'Mozilla/5.0'); "
+    "        reply = QgsNetworkAccessManager.instance().blockingGet(req); "
+    "        data = json.loads(reply.content().data().decode('utf-8')); "
+    "        p = data.get('properties', {}); "
+    "        il = str(p.get('ilAd', '') or ''); "
+    "        ilce = str(p.get('ilceAd', '') or ''); "
+    "        mah = str(p.get('mahalleAd', '') or ''); "
+    "        ada = str(p.get('adaNo', '') or ''); "
+    "        parsel = str(p.get('parselNo', '') or ''); "
+    "        alan = str(p.get('alan', '') or ''); "
+    "        nitelik = str(p.get('nitelik', '') or ''); "
+    "        mevkii = str(p.get('mevkii', '') or ''); "
+    "        ozet = str(p.get('ozet', '') or f'{mah}-{ada}/{parsel}'); "
+    "        summary = f'TKGM: {il} / {ilce} / {mah} | Block: {ada}, Parcel: {parsel} | Area: {alan} m2 | {nitelik}'; "
+    "        QApplication.clipboard().setText(summary); "
+    "        coords = data.get('geometry', {}).get('coordinates', []); "
+    "        if coords: "
+    "            rings = [[QgsPointXY(c[0], c[1]) for c in ring] for ring in coords]; "
+    "            poly_geom = QgsGeometry.fromPolygonXY(rings); "
+    "            t_layers = QgsProject.instance().mapLayersByName('TKGM Cadastre Parcels (TR)'); "
+    "            if t_layers: "
+    "                t_layer = t_layers[0]; "
+    "            else: "
+    "                uri = 'Polygon?crs=EPSG:4326&field=province:string(50)&field=district:string(50)&field=neighborhood:string(50)&field=block_no:string(20)&field=parcel_no:string(20)&field=area_m2:double&field=land_type:string(100)&field=locality:string(100)&field=parcel_key:string(60)&field=query_date:string(30)'; "
+    "                t_layer = QgsVectorLayer(uri, 'TKGM Cadastre Parcels (TR)', 'memory'); "
+    "                sym = t_layer.renderer().symbol(); "
+    "                if sym: "
+    "                    sym.setColor(QColor(245, 158, 11, 45)); "
+    "                    sym.symbolLayer(0).setStrokeColor(QColor(217, 119, 6)); "
+    "                    sym.symbolLayer(0).setStrokeWidth(0.6); "
+    "                QgsProject.instance().addMapLayer(t_layer); "
+    "            existing = {str(ft['parcel_key']) for ft in t_layer.getFeatures() if ft['parcel_key']}; "
+    "            if ozet not in existing: "
+    "                alan_val = float(alan.replace(',', '').strip() or 0.0) if alan else 0.0; "
+    "                now_str = datetime.datetime.now().strftime('%Y-%m-%d %H:%M'); "
+    "                f = QgsFeature(t_layer.fields()); "
+    "                f.setGeometry(poly_geom); "
+    "                f.setAttributes([il, ilce, mah, ada, parsel, alan_val, nitelik, mevkii, ozet, now_str]); "
+    "                t_layer.dataProvider().addFeatures([f]); "
+    "                t_layer.triggerRepaint(); "
+    "        if hasattr(iface, 'messageBar'): "
+    "            iface.messageBar().pushInfo('TKGM Cadastre', f'🏛️ {summary} (Copied to clipboard & added to layer)'); "
+    "    except Exception as exc: "
+    "        if hasattr(iface, 'messageBar'): "
+    "            iface.messageBar().pushWarning('TKGM Cadastre', f'TKGM query failed (no parcel found at coordinate or service unavailable): {exc}'); "
 )
 
 
@@ -85,19 +155,19 @@ AVAILABLE_ACTIONS = [
     },
     {
         "key": "yandex_maps",
-        "name": "Yandex Haritalar",
+        "name": "Yandex Maps (Satellite)",
         "short_title": "Yandex",
         "type": "OpenUrl",
-        "command": f"https://yandex.com.tr/harita/?ll={LON_EXPR}%2C{LAT_EXPR}&z=19&l=sat",
+        "command": f"https://yandex.com/maps/?ll={LON_EXPR}%2C{LAT_EXPR}&z=19&l=sat",
         "description": "Open location in Yandex Maps satellite view",
     },
     {
         "key": "tkgm_cadastre",
-        "name": "TKGM Parsel Sorgu",
-        "short_title": "TKGM",
-        "type": "OpenUrl",
-        "command": f"https://parselsorgu.tkgm.gov.tr/#ara/cografi/{LAT_EXPR}/{LON_EXPR}/19",
-        "description": "Open national cadastre portal at point coordinates",
+        "name": "TKGM Instant Cadastre (Turkey Only)",
+        "short_title": "⚡ TKGM (TR)",
+        "type": "GenericPython",
+        "command": TKGM_INSTANT_QUERY_PYTHON_CODE,
+        "description": "Instant official cadastral query via MEGSIS API: adds parcel boundary to map & copies details (Turkey Only)",
     },
     {
         "key": "copy_clipboard",
@@ -184,19 +254,24 @@ def apply_actions_to_layer(
     from qgis.core import QgsAction
 
     manager = layer.actions()
-    existing_names = {action.name() for action in manager.actions()}
-
-    actions_to_add = [act for act in AVAILABLE_ACTIONS if act["key"] in action_keys]
-    if file_field and "open_file" in action_keys:
+    norm_keys = list(dict.fromkeys(["tkgm_cadastre" if k == "tkgm_api_instant" else k for k in action_keys]))
+    actions_to_add = [act for act in AVAILABLE_ACTIONS if act["key"] in norm_keys]
+    if file_field and "open_file" in norm_keys:
         actions_to_add.append(build_open_file_action(file_field))
-    if intersect_target_layer and "select_intersects" in action_keys:
+    if intersect_target_layer and "select_intersects" in norm_keys:
         actions_to_add.append(build_select_intersecting_action(intersect_target_layer))
+
+    target_names = {item["name"] for item in actions_to_add}
+    # Remove older matching actions so they are refreshed with bug-fixed commands, plus any duplicate TKGM actions
+    for old_act in list(manager.actions()):
+        old_name = old_act.name()
+        if old_name in target_names or "tkgm" in old_name.lower():
+            with contextlib.suppress(Exception):
+                manager.removeAction(old_act.id())
 
     added_count = 0
     for item in actions_to_add:
         name = item["name"]
-        if name in existing_names:
-            continue
 
         act_type = _get_action_type(item["type"])
         action_obj = QgsAction(
@@ -209,10 +284,48 @@ def apply_actions_to_layer(
         )
 
         with contextlib.suppress(Exception):
-            # Set action scopes: Canvas, Feature, Field
-            action_obj.setActionScopes({"Canvas", "Feature", "Field"})
+            # Set action scopes: Canvas, Feature, Field, Layer, Form
+            action_obj.setActionScopes({"Canvas", "Feature", "Field", "Layer", "Form"})
 
         manager.addAction(action_obj)
         added_count += 1
 
+    if added_count > 0:
+        all_acts = list(manager.actions())
+        if all_acts:
+            with contextlib.suppress(Exception):
+                # Set first injected action as default action for Canvas clicks
+                manager.setDefaultAction("Canvas", all_acts[-added_count].id())
+
     return added_count
+
+
+def get_layer_actions(layer: "QgsVectorLayer") -> list[dict[str, Any]]:
+    """Return a list of dictionaries describing all actions currently attached to the layer."""
+    if not layer or not layer.isValid():
+        return []
+    res = []
+    manager = layer.actions()
+    for act in manager.actions():
+        scopes = sorted(list(act.actionScopes())) if hasattr(act, "actionScopes") else []
+        res.append({
+            "id": act.id(),
+            "name": act.name(),
+            "short_title": act.shortTitle() if hasattr(act, "shortTitle") else act.name(),
+            "type": act.type(),
+            "command": act.command(),
+            "scopes": scopes,
+        })
+    return res
+
+
+def remove_all_actions(layer: "QgsVectorLayer") -> int:
+    """Clear all actions from the layer's action manager and return the count removed."""
+    if not layer or not layer.isValid():
+        return 0
+    manager = layer.actions()
+    count = len(list(manager.actions()))
+    with contextlib.suppress(Exception):
+        manager.clearActions()
+    return count
+

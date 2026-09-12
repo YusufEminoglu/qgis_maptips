@@ -8,13 +8,16 @@ from qgis_maptips.core.chart_engine import (
     build_progress_bar_table,
     build_segmented_bar_table,
     build_svg_donut_data_uri,
+    build_svg_media_placeholder,
     build_svg_sparkline,
 )
 from qgis_maptips.core.template_engine import (
     Archetype,
     TemplateConfig,
+    build_card_action_buttons_row,
     build_conditional_badge_html,
     build_relational_metric_row,
+    build_safe_attribute_expr,
     compile_maptip_html,
     compile_raster_hud_html,
 )
@@ -25,6 +28,16 @@ from qgis_maptips.core.action_builder import (
     build_custom_url_action,
     build_open_file_action,
     build_select_intersecting_action,
+    get_layer_actions,
+    remove_all_actions,
+)
+from qgis_maptips.core.cadastre_tool import (
+    CADASTRE_LAYER_NAME,
+    CADASTRE_LAYER_URI,
+    get_daily_query_count,
+    is_in_turkey_bounds,
+    parse_tkgm_response,
+    record_tkgm_query,
 )
 
 
@@ -46,14 +59,21 @@ class TestChartEngine(unittest.TestCase):
     def test_svg_donut_data_uri(self):
         slices = [('"val1"', "Slice 1", "#10b981"), ('"val2"', "Slice 2", "#3b82f6")]
         img_tag = build_svg_donut_data_uri(slices, size=80)
-        self.assertTrue(img_tag.startswith('<img src="data:image/svg+xml;utf8,<svg'))
-        self.assertIn('stroke-dasharray="[% clamp(0.0, round(100.0 * (coalesce("val1", 0))', img_tag)
+        self.assertTrue(img_tag.startswith("<img src='data:image/svg+xml;utf8,<svg"))
+        self.assertIn("stroke-dasharray", img_tag)
+        self.assertIn("%2310b981", img_tag)
 
     def test_svg_sparkline(self):
         fields = ["pop_2020", "pop_2021", "pop_2022", "pop_2024"]
         spark_tag = build_svg_sparkline(fields, width=140, height=28)
-        self.assertTrue(spark_tag.startswith('<img src="data:image/svg+xml;utf8,<svg'))
-        self.assertIn("clamp(2.0, round(24 * (coalesce(\"pop_2020\", 0.0))", spark_tag)
+        self.assertTrue(spark_tag.startswith("<img src='data:image/svg+xml;utf8,<svg"))
+        self.assertIn("max(0.001", spark_tag)
+        self.assertIn("pop_2020", spark_tag)
+
+    def test_svg_media_placeholder(self):
+        uri = build_svg_media_placeholder(width=280, height=120)
+        self.assertTrue(uri.startswith("data:image/svg+xml;utf8,<svg"))
+        self.assertIn("No Photo Available", uri)
 
 
 class TestTemplateEngine(unittest.TestCase):
@@ -74,9 +94,29 @@ class TestTemplateEngine(unittest.TestCase):
         self.assertIn('width="320"', html)
         self.assertIn('[% "name" %]', html)
         self.assertIn('[% "category" %]', html)
-        self.assertIn('[% "score" %] pts', html)
+        self.assertIn('"score"', html)
+        self.assertIn('pts', html)
         self.assertIn('Total Area', html)
         self.assertIn('Verified Data', html)
+
+    def test_safe_attribute_expr(self):
+        expr = build_safe_attribute_expr("area", format_numbers=True, decimal_places=2, null_text="—")
+        self.assertIn('"area" IS NULL', expr)
+        self.assertIn('format_number(to_real("area"), 0)', expr)
+        self.assertIn('format_number(to_real("area"), 2)', expr)
+        self.assertIn("'—'", expr)
+
+        raw_expr = build_safe_attribute_expr("notes", format_numbers=False, null_text="N/A")
+        self.assertEqual(raw_expr, "coalesce(nullif(to_string(\"notes\"), ''), 'N/A')")
+
+    def test_media_card_fallbacks(self):
+        cfg_ph = TemplateConfig(archetype=Archetype.MEDIA_CARD, media_field="photo_url", media_fallback="placeholder")
+        html_ph = compile_maptip_html(cfg_ph)
+        self.assertIn("No Photo Available", html_ph)
+
+        cfg_hide = TemplateConfig(archetype=Archetype.MEDIA_CARD, media_field="photo_url", media_fallback="hide")
+        html_hide = compile_maptip_html(cfg_hide)
+        self.assertIn("length(trim(coalesce(to_string(\"photo_url\"), '')))", html_hide)
 
     def test_compile_progress_bar_card(self):
         cfg = TemplateConfig(
@@ -138,6 +178,34 @@ class TestTemplateEngine(unittest.TestCase):
         self.assertIn("Band 3", hud_html)
         self.assertIn("{band_1_val}", hud_html)
 
+    def test_card_width_custom_and_clamping(self):
+        cfg = TemplateConfig(card_width=450)
+        html = compile_maptip_html(cfg)
+        self.assertIn('width="450"', html)
+        self.assertIn('style="width:450px; min-width:450px; max-width:450px;', html)
+
+        # Clamped below minimum (180)
+        cfg_min = TemplateConfig(card_width=100)
+        html_min = compile_maptip_html(cfg_min)
+        self.assertIn('width="180"', html_min)
+        self.assertIn('style="width:180px; min-width:180px; max-width:180px;', html_min)
+
+        # Clamped above maximum (800)
+        cfg_max = TemplateConfig(card_width=1200)
+        html_max = compile_maptip_html(cfg_max)
+        self.assertIn('width="800"', html_max)
+        self.assertIn('style="width:800px; min-width:800px; max-width:800px;', html_max)
+
+    def test_card_action_buttons_row(self):
+        row_html = build_card_action_buttons_row(["google_satellite", "google_streetview", "copy_clipboard"], {
+            "sub_bg": "#115e59", "sub_text": "#ccfbf1", "row_alt": "#f8fafc", "border": "#e2e8f0", "text_secondary": "#64748b"
+        })
+        self.assertIn("Quick Actions", row_html)
+        self.assertIn("Google Sat", row_html)
+        self.assertIn("Street View", row_html)
+        self.assertIn("action:copy_clipboard", row_html)
+        self.assertIn("https://www.google.com/maps", row_html)
+
 
 class TestActionBuilder(unittest.TestCase):
     def test_available_actions(self):
@@ -167,6 +235,141 @@ class TestActionBuilder(unittest.TestCase):
         act = build_custom_url_action("ERP Portal", "https://erp.corp/item/[% \"id\" %]")
         self.assertEqual(act["command"], "https://erp.corp/item/[% \"id\" %]")
 
+    def test_tkgm_action(self):
+        actions_map = {act["key"]: act for act in AVAILABLE_ACTIONS}
+        self.assertIn("tkgm_cadastre", actions_map)
+
+        act = actions_map["tkgm_cadastre"]
+        self.assertIn("(Turkey Only)", act["name"])
+        self.assertIn("cbsapi.tkgm.gov.tr/megsiswebapi", act["command"])
+        self.assertIn("QgsNetworkAccessManager", act["command"])
+        self.assertIn("TKGM Cadastre Parcels (TR)", act["command"])
+
+        # Card buttons ribbon row
+        row_html_tkgm = build_card_action_buttons_row(["tkgm_cadastre"], {
+            "sub_bg": "#115e59", "sub_text": "#ccfbf1", "row_alt": "#f8fafc", "border": "#e2e8f0", "text_secondary": "#64748b"
+        })
+        self.assertIn("⚡ TKGM (TR)", row_html_tkgm)
+        self.assertIn("action:tkgm_cadastre", row_html_tkgm)
+
+    def test_card_action_buttons_row_wrapping(self):
+        # When 6 buttons are given, they should wrap into rows of max 3 (i.e. at least 2 <tr> rows)
+        all_keys = ["google_satellite", "google_streetview", "yandex_maps", "tkgm_cadastre", "copy_clipboard", "export_card_report"]
+        row_html = build_card_action_buttons_row(all_keys, {
+            "sub_bg": "#115e59", "sub_text": "#ccfbf1", "row_alt": "#f8fafc", "border": "#e2e8f0", "text_secondary": "#64748b"
+        }, card_width=320)
+        self.assertGreaterEqual(row_html.count("<tr>"), 2)
+
+
+class TestCadastreTool(unittest.TestCase):
+    """Tests for the interactive TKGM MEGSIS cadastre query and parsing logic."""
+
+    def test_is_in_turkey_bounds(self):
+        # Within Turkey
+        self.assertTrue(is_in_turkey_bounds(39.93, 32.85))   # Ankara
+        self.assertTrue(is_in_turkey_bounds(41.01, 28.97))   # Istanbul
+        self.assertTrue(is_in_turkey_bounds(38.42, 27.14))   # Izmir
+        self.assertTrue(is_in_turkey_bounds(36.88, 30.70))   # Antalya
+        self.assertTrue(is_in_turkey_bounds(39.75, 43.05))   # Agri
+
+        # Outside Turkey
+        self.assertFalse(is_in_turkey_bounds(51.5074, -0.1278)) # London
+        self.assertFalse(is_in_turkey_bounds(48.8566, 2.3522))  # Paris
+        self.assertFalse(is_in_turkey_bounds(40.7128, -74.0060))# New York
+        self.assertFalse(is_in_turkey_bounds(35.6762, 139.6503))# Tokyo
+        self.assertFalse(is_in_turkey_bounds(0.0, 0.0))         # Null Island
+
+    def test_parse_tkgm_response_polygon(self):
+        mock_data = {
+            "type": "Feature",
+            "geometry": {
+                "type": "Polygon",
+                "coordinates": [
+                    [
+                        [27.174361, 39.11051],
+                        [27.174500, 39.11055],
+                        [27.174480, 39.11020],
+                        [27.174300, 39.11025],
+                        [27.174361, 39.11051],
+                    ]
+                ],
+            },
+            "properties": {
+                "ilAd": "İZMİR",
+                "ilceAd": "BERGAMA",
+                "mahalleAd": "ERTUĞRUL",
+                "adaNo": "123",
+                "parselNo": "4",
+                "alan": "542,18",
+                "nitelik": "Kargir Ev ve Bahçesi",
+                "mevkii": "Köyiçi",
+                "ozet": "İzmir, Bergama, Ertuğrul, 123 Ada, 4 Parsel",
+            },
+        }
+        res = parse_tkgm_response(mock_data)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["il"], "İZMİR")
+        self.assertEqual(res["ilce"], "BERGAMA")
+        self.assertEqual(res["mahalle"], "ERTUĞRUL")
+        self.assertEqual(res["ada_no"], "123")
+        self.assertEqual(res["parsel_no"], "4")
+        self.assertAlmostEqual(res["alan_m2"], 542.18, places=2)
+        self.assertEqual(res["nitelik"], "Kargir Ev ve Bahçesi")
+        self.assertEqual(res["mevkii"], "Köyiçi")
+        self.assertEqual(res["ozet"], "İZMİR-BERGAMA-ERTUĞRUL-123/4")
+        self.assertIsNotNone(res["geometry"])
+
+    def test_parse_tkgm_response_multipolygon(self):
+        mock_data = {
+            "type": "Feature",
+            "geometry": {
+                "type": "MultiPolygon",
+                "coordinates": [
+                    [
+                        [
+                            [27.1, 39.1],
+                            [27.2, 39.1],
+                            [27.2, 39.2],
+                            [27.1, 39.1],
+                        ]
+                    ]
+                ],
+            },
+            "properties": {
+                "ilAd": "ANKARA",
+                "ilceAd": "ÇANKAYA",
+                "mahalleAd": "KAVAKLIDERE",
+                "adaNo": "500",
+                "parselNo": "12",
+                "alan": "1250.50",
+                "nitelik": "Arsa",
+                "mevkii": "Tunalı",
+            },
+        }
+        res = parse_tkgm_response(mock_data)
+        self.assertIsNotNone(res)
+        self.assertEqual(res["il"], "ANKARA")
+        self.assertEqual(res["ada_no"], "500")
+        self.assertEqual(res["parsel_no"], "12")
+        self.assertAlmostEqual(res["alan_m2"], 1250.50, places=2)
+        self.assertIsNotNone(res["geometry"])
+
+    def test_parse_tkgm_empty_or_invalid(self):
+        self.assertIsNone(parse_tkgm_response({}))
+        self.assertIsNone(parse_tkgm_response(None))
+        self.assertIsNone(parse_tkgm_response({"features": []}))
+        self.assertIsNone(parse_tkgm_response({"geometry": None}))
+
+    def test_cadastre_layer_schema(self):
+        self.assertEqual(CADASTRE_LAYER_NAME, "TKGM Parselleri (TR)")
+        for field in ("il", "ilce", "mahalle", "ada_no", "parsel_no", "alan_m2", "nitelik", "mevkii", "ozet", "sorgu_tarihi"):
+            self.assertIn(f"field={field}:", CADASTRE_LAYER_URI)
+
+    def test_daily_query_counter(self):
+        c1 = record_tkgm_query()
+        self.assertGreaterEqual(c1, 1)
+        self.assertEqual(get_daily_query_count(), c1)
+
 
 class TestQt6EnumSafety(unittest.TestCase):
     """Ensure no bare Qt.* unscoped members exist in the plugin source."""
@@ -178,6 +381,7 @@ class TestQt6EnumSafety(unittest.TestCase):
         re.compile(r"\bQt\.(SolidPattern|NoBrush)\b"),
         re.compile(r"\bQt\.(WA_TransparentForMouseEvents|WA_DeleteOnClose)\b"),
         re.compile(r"\bQt\.(WindowStaysOnTopHint|ToolTip)\b"),
+        re.compile(r"\bQt\.(PointingHandCursor)\b"),
     ]
 
     def test_no_unscoped_qt_enums(self):

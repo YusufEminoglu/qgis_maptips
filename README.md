@@ -28,6 +28,12 @@
   - **Export Layer Cards as Interactive HTML Portfolio Report:** Render every feature into a standalone, searchable HTML catalog with responsive grid cards and print-ready CSS.
 - **Zero External Dependencies:** Every chart and component is rendered using pure nested HTML tables or inline SVG data-URIs, guaranteeing full compatibility with Qt's `QTextDocument` engine without WebKit/Chromium overhead.
 - **Native Persistence & Portability:** MapTips and actions are stored directly in the standard QGIS layer style and `QgsActionManager`. Projects shared with colleagues work natively without requiring the plugin to be installed.
+- **Instant Canvas Cadastre Picker (Turkey Only):** Query and download official cadastral parcel boundaries directly from the QGIS map canvas without selecting any vector layer. Works over any satellite imagery (Google, Bing, XYZ) or blank canvas:
+  - Custom high-visibility reticle cursor with visual flash feedback on the clicked parcel.
+  - Automatically creates a styled `"TKGM Parselleri (TR)"` memory layer with Turkish attributes (`il`, `ilce`, `mahalle`, `ada_no`, `parsel_no`, `alan_m2`, `nitelik`, `mevkii`, `ozet`, `sorgu_tarihi`) and amber boundary symbology.
+  - Default inside-polygon centered labeling (`Ada No / Parsel No`) with a subtle white halo buffer.
+  - Automatically configures an Amber MapTip KPI Card and 1-click web navigation actions (Google Sat, Street View, clipboard copy) on the newly downloaded parcels.
+  - Transparent daily quota tracking and user-friendly warnings for TKGM fair-use rate limits (HTTP 403).
 
 ---
 
@@ -57,6 +63,26 @@ Under the **Qgis Advanced Map Tips&Actions** processing provider group:
 
 ---
 
+## Third-Party Services, Fair-Use Quotas & Terms
+
+External web mapping services and APIs integrated into the plugin actions and tools are subject to the respective provider's terms of service and usage policies:
+- **TKGM MEGSİS Web API:** Informational cadastral parcel service for the Republic of Turkey. Subject to fair-use rate limits and daily query quotas (~100 queries/day/IP). Not an official legal title deed certificate.
+- **Google Maps & Google Street View:** Governed by Google Maps Platform terms.
+- **OpenStreetMap:** © OpenStreetMap contributors, ODbL.
+- **Yandex Maps:** Governed by Yandex Maps service terms.
+
+Detailed service terms, rate limiting guidelines, and legal disclaimers are documented in [**`THIRD_PARTY.md`**](THIRD_PARTY.md).
+
+---
+
+## Acknowledgments & Special Thanks
+
+We would like to express our sincere gratitude and special thanks to:
+- **[geographyclub](https://github.com/geographyclub)** for outstanding creative inspiration on responsive, publication-grade HTML layout formatting in QGIS map layouts, compact micro-card aesthetics, and advanced attribute expressions.
+- **[Okan Şafak](https://github.com/okansafak)** for pioneering creative inspiration on the 1-click interactive map canvas click mode for direct cadastral parcel querying and vector layer downloading from TKGM MEGSİS services ([`qgistkgmplugin`](https://github.com/okansafak/qgistkgmplugin)).
+
+---
+
 ## Installation & Requirements
 
 - **Supported QGIS Versions:** QGIS 3.28 LTR through 3.44 LTR, and QGIS 4.x (Qt5 & Qt6 compatible).
@@ -69,4 +95,6 @@ Under the **Qgis Advanced Map Tips&Actions** processing provider group:
 ## Author & License
 
 Developed by **Yusuf Eminoğlu** (`yusuf.eminoglu@deu.edu.tr`).  
+Repository: [https://gitlab.com/geophilo1/qgis_maptips](https://gitlab.com/geophilo1/qgis_maptips) (GitLab)  
+Issue Tracker: [https://gitlab.com/geophilo1/qgis_maptips/-/issues](https://gitlab.com/geophilo1/qgis_maptips/-/issues)  
 Distributed under the **GNU General Public License v3.0 or later** (GPL-3.0-or-later).

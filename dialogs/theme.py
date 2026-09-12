@@ -170,6 +170,68 @@ QTextBrowser#previewBox {{
     border: 1px solid {t['border']};
     border-radius: 6px;
 }}
+QPushButton#presetChip {{
+    background-color: {t['card']};
+    color: {t['text']};
+    border: 1px solid {t['border']};
+    border-radius: 12px;
+    padding: 3px 10px;
+    font-size: 8pt;
+    font-weight: 600;
+}}
+QPushButton#presetChip:hover {{
+    border-color: {t['accent']};
+    color: {t['accent']};
+    background-color: {t['hero']};
+}}
+QLabel#heroEyebrow {{
+    color: {t['accent']};
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+}}
+QLabel#layerBadge {{
+    color: {t['text']};
+    background-color: {t['card']};
+    border: 1px solid {t['border']};
+    border-radius: 4px;
+    padding: 3px 6px;
+    font-size: 8pt;
+}}
+QPushButton#quietButton {{
+    background-color: {t['card']};
+    color: {t['text']};
+    border: 1px solid {t['border']};
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-size: 8pt;
+    font-weight: 600;
+}}
+QPushButton#quietButton:hover {{
+    border-color: {t['accent']};
+    color: {t['accent']};
+    background-color: {t['hero']};
+}}
+QPushButton#collapsibleHeader {{
+    background-color: {t['card']};
+    color: {t['text']};
+    border: 1px solid {t['border']};
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 8.5pt;
+    font-weight: 600;
+    text-align: left;
+}}
+QPushButton#collapsibleHeader:hover {{
+    border-color: {t['accent']};
+    background-color: {t['hero']};
+}}
+QFrame#collapsibleContent {{
+    border-left: 2px solid {t['accent']};
+    margin-left: 4px;
+    padding-left: 6px;
+    background-color: transparent;
+}}
 """
 
 
