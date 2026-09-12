@@ -1,0 +1,371 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Qgis Advanced Map Tips and Actions Studio — Comprehensive User Manual and Reference Guide for QGIS 3.28+ and QGIS 4. Published by Geophilo Spatial Labs.">
+  <title>Qgis Advanced Map Tips & Actions — User Manual & Reference Guide</title>
+  <link rel="stylesheet" href="guide.css">
+</head>
+<body>
+<div class="wrap">
+
+  <!-- ── Top Navigation Bar ─────────────────────────────────── -->
+  <nav class="topbar">
+    <span class="mark">MT</span>
+    <strong>Qgis Advanced Map Tips & Actions</strong>
+    <span class="spacer"></span>
+    <a href="#quick-start">Quick Start</a>
+    <a href="#archetypes">Archetypes</a>
+    <a href="#actions-hub">Actions Hub</a>
+    <a href="#cadastre">TKGM Cadastre</a>
+    <a href="#live-hud">Live HUD</a>
+    <a href="https://plugins.qgis.org/plugins/qgis_maptips/" class="btn-nav-accent" target="_blank">⭐ Rate on QGIS Hub</a>
+    <a href="https://gitlab.com/geophilo1/qgis_maptips" target="_blank">GitLab</a>
+  </nav>
+
+  <!-- ── Hero Banner ───────────────────────────────────────── -->
+  <header class="hero">
+    <div class="hero-eyebrow">Geophilo Applied Spatial Labs &middot; Official Documentation</div>
+    <h1>Interactive MapTip Cards & 1-Click Layer Actions Studio</h1>
+    <p class="lead">
+      Transform raw, unformatted GIS attribute tables into responsive, publication-grade Qt-safe HTML cards,
+      zero-dependency micro-charts, and dynamic 1-click web/spatial action triggers for QGIS 3.28+ LTR and QGIS 4.
+    </p>
+    <div class="badges-row">
+      <span class="badge badge-brand">✓ QGIS 3.28+ LTR & QGIS 4.x Compatible</span>
+      <span class="badge badge-brand">✓ Zero External Pip Dependencies</span>
+      <span class="badge badge-brand">✓ Native Layer Persistence</span>
+      <span class="badge badge-amber">🇹🇷 Instant TKGM MEGSİS Cadastre</span>
+      <span class="badge">GPL-3.0 License</span>
+    </div>
+    <div class="hero-actions">
+      <a href="#quick-start" class="btn btn-primary">🚀 Quick Start Guide</a>
+      <a href="https://plugins.qgis.org/plugins/qgis_maptips/" class="btn btn-amber" target="_blank">⭐ Rate Plugin on QGIS Hub</a>
+      <a href="https://gitlab.com/geophilo1/qgis_maptips" class="btn btn-secondary" target="_blank">🦊 GitLab Repository</a>
+    </div>
+  </header>
+
+  <!-- ── Capability Overview Cards ─────────────────────────── -->
+  <h2 class="section-title">Key Studio Capabilities at a Glance</h2>
+  <p class="section-desc">
+    Everything you need to turn static maps into interactive, presentation-ready dashboards.
+  </p>
+
+  <div class="guide-grid">
+    <div class="guide-card">
+      <span class="step-num">Feature 1</span>
+      <h3>Universal Card Archetypes</h3>
+      <p>5 proven layout styles for every spatial workflow: bold KPI metrics, comparative target progress bars, multi-category SVG donut shares, temporal sparklines, and media photo viewers.</p>
+      <ul>
+        <li>Native Qt QTextDocument compatibility</li>
+        <li>No WebKit or Chromium browser engine needed</li>
+        <li>Instant 1-click Preset chips</li>
+      </ul>
+    </div>
+
+    <div class="guide-card">
+      <span class="step-num">Feature 2</span>
+      <h3>1-Click Layer Actions Hub</h3>
+      <p>Inject dynamic CRS-aware web actions into any vector layer. Coordinates are transformed to WGS84 point-on-surface on the fly for satellite, street view, and spatial operations.</p>
+      <ul>
+        <li>Google Satellite, Street View & Yandex Maps</li>
+        <li>Copy all attributes to clipboard</li>
+        <li>Export standalone HTML card reports</li>
+      </ul>
+    </div>
+
+    <div class="guide-card">
+      <span class="step-num">Feature 3</span>
+      <h3>🇹🇷 Instant Canvas Cadastre (TKGM)</h3>
+      <p>Click anywhere on the QGIS map canvas to query the official TKGM MEGSİS web API and automatically download the parcel boundary polygon into a styled layer with centroid labels.</p>
+      <ul>
+        <li>Zero vector layer prerequisite</li>
+        <li>Turkish fields (il, ilce, ada_no, parsel_no, alan_m2)</li>
+        <li>Automatic centered polygon labels with halo buffer</li>
+      </ul>
+    </div>
+
+    <div class="guide-card">
+      <span class="step-num">Feature 4</span>
+      <h3>Live Canvas Hover HUD</h3>
+      <p>Real-time debounced hover inspection for raster layers (DEM, Slope, NDVI, Orthophotos). Read elevation and band values under the cursor without opening Identify dialogs.</p>
+      <ul>
+        <li>Precision high-contrast reticle cursor</li>
+        <li>Shift + Click stationary pin/freeze</li>
+        <li>Composite multi-raster + top vector inspection</li>
+      </ul>
+    </div>
+
+    <div class="guide-card">
+      <span class="step-num">Feature 5</span>
+      <h3>Relational Spatial Metrics</h3>
+      <p>Compute connected features in other project layers (e.g. number of trees or buildings inside a parcel) using native QGIS spatial overlay expressions without modifying schemas.</p>
+      <ul>
+        <li><code>overlay_intersects</code> & <code>overlay_contains</code></li>
+        <li>Nearest neighbor attribute lookups</li>
+        <li>Zero spatial join data duplication</li>
+      </ul>
+    </div>
+
+    <div class="guide-card">
+      <span class="step-num">Feature 6</span>
+      <h3>100% Native Portability</h3>
+      <p>Compiled MapTip templates and injected action definitions are written directly into native QGIS project and layer style XML files. Projects shared with colleagues work without the plugin.</p>
+      <ul>
+        <li>Recipient does not need plugin installed</li>
+        <li>QGS & QGZ project persistence</li>
+        <li>Batch processing algorithms for bulk setup</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ── Stage 1: Quick Start ───────────────────────────────── -->
+  <div id="quick-start" class="stage-block">
+    <h3>🚀 Stage 1: Quick Start in 60 Seconds</h3>
+    <p>
+      Creating your first professional MapTip card in QGIS takes only four clicks.
+    </p>
+
+    <div class="stage-steps">
+      <div class="stage-step-item">
+        <strong>1. Select Active Layer</strong>
+        <span>Pick any polygon, line, or point vector layer in your QGIS project from the top Layer combo box.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>2. Click a Preset Chip</strong>
+        <span>Click <b>🏢 KPI</b>, <b>⚡ Bar</b>, <b>🍩 Donut</b>, or <b>📈 Trend</b> to immediately load a balanced configuration.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>3. Click 'Apply MapTip'</strong>
+        <span>Click the primary green <b>🚀 Apply MapTip to Layer</b> button at the bottom of the designer tab.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>4. Hover on Canvas</strong>
+        <span>Ensure the MapTips icon on the QGIS canvas toolbar (or the dock iOS switch) is ON, and hover over map features!</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>Pro-Tip:</strong> Use the <b>Sample Feature Navigator</b> (<code>◀ Prev</code>, <code>Next ▶</code>, <code>🔀 Cycle</code>) right above the Rendered Card preview. You can test your card design against live feature values without closing or switching panels.
+    </div>
+  </div>
+
+  <!-- ── Stage 2: Layout Archetypes ────────────────────────── -->
+  <div id="archetypes" class="stage-block">
+    <h3>🎨 Stage 2: Choosing the Right Layout Archetype</h3>
+    <p>
+      Every dataset tells a different story. Qgis MapTips provides five universal visual archetypes engineered specifically for the Qt QTextDocument rendering subsystem:
+    </p>
+
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Archetype</th>
+            <th>Visual Focus</th>
+            <th>Best Suited For</th>
+            <th>Generated Technology</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><b>KPI Card</b></td>
+            <td>Prominent headline number with unit badge and key-value metadata rows.</td>
+            <td>Real estate prices, cadastral areas, inspection scores, asset IDs.</td>
+            <td>Clean Qt HTML nested tables with contrast text tokens.</td>
+          </tr>
+          <tr>
+            <td><b>Progress Bar</b></td>
+            <td>Comparative target percentage bar showing current vs maximum capacity.</td>
+            <td>Reservoir levels, zoning density limits, budget spend, occupancy rate.</td>
+            <td>Qt table-cell percentage clamping (<code>clamp(0.0, ..., 100.0)</code>).</td>
+          </tr>
+          <tr>
+            <td><b>Donut Chart</b></td>
+            <td>Proportional radial donut graphic showing categorical share breakdown.</td>
+            <td>Land-use composition, demographic shares, zoning quotas, crop distributions.</td>
+            <td>Pure SVG inline data-URI with stroke-dasharray (Zero JavaScript).</td>
+          </tr>
+          <tr>
+            <td><b>Sparkline Trend</b></td>
+            <td>Sequential or temporal multi-year mini bar trendline.</td>
+            <td>Historical population census, rainfall timeline, traffic hourly counts.</td>
+            <td>Dynamic SVG bar sparkline normalized against greatest field value.</td>
+          </tr>
+          <tr>
+            <td><b>Media / Photo Card</b></td>
+            <td>Centrally framed image thumbnail with graceful missing-photo placeholder.</td>
+            <td>Field surveys, infrastructure photos, building facades, damage assessments.</td>
+            <td>Expression-wrapped <code>&lt;img&gt;</code> with SVG null fallback.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ── Stage 3: Precision Formatting ─────────────────────── -->
+  <div id="formatting" class="stage-block">
+    <h3>⚙️ Stage 3: Precision Data Formatting & Null Safety</h3>
+    <p>
+      Raw GIS datasets often contain unformatted floating-point numbers (e.g. <code>14528.39847192</code>) or empty/NULL fields that look amateurish in standard tooltips. Qgis MapTips solves this at the expression level:
+    </p>
+
+    <ul>
+      <li><b>Automatic Number Formatting (<code>format_numbers=True</code>):</b> Integer values automatically receive thousands grouping commas (e.g. <code>1,250,000</code>). Floating-point values are rounded and formatted to your configured decimal precision (e.g. <code>254.50</code>).</li>
+      <li><b>Clean Missing Value Fallbacks:</b> Any NULL, empty, or whitespace attribute is replaced with an elegant dash (<code>—</code>) or custom text instead of displaying an ugly blank space or raw <code>NULL</code> string.</li>
+      <li><b>Photo Fallback Engine:</b> If a feature does not have a valid photo URL or path, the card displays a clean <code>📷 No Photo Available</code> SVG placeholder rather than a broken image box with an 'X'. Alternatively, choose <code>hide</code> mode to collapse the photo row entirely when no image is present.</li>
+    </ul>
+
+    <pre><code>-- Generated QGIS expression for safe attribute display:
+CASE 
+  WHEN "area_m2" IS NULL OR length(trim(to_string("area_m2"))) = 0 THEN '—' 
+  WHEN try(to_real("area_m2"), NULL) IS NOT NULL THEN (
+    CASE WHEN to_real("area_m2") = round(to_real("area_m2"), 0) 
+      THEN format_number(to_real("area_m2"), 0) 
+      ELSE format_number(to_real("area_m2"), 2) END) 
+  ELSE to_string("area_m2") 
+END</code></pre>
+  </div>
+
+  <!-- ── Stage 4: Actions Hub ──────────────────────────────── -->
+  <div id="actions-hub" class="stage-block">
+    <h3>⚡ Stage 4: The 1-Click Layer Actions Hub</h3>
+    <p>
+      QGIS Layer Actions allow map users to trigger external web navigation, run desktop scripts, or select intersecting data. Qgis MapTips makes action creation as simple as checking a box:
+    </p>
+
+    <div class="stage-steps">
+      <div class="stage-step-item">
+        <strong>🌍 Google Maps Satellite</strong>
+        <span>Opens the exact feature location in Google Maps satellite view with dynamic WGS84 point-on-surface transformation.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>🚶 Google Street View</strong>
+        <span>Launches a full 360-degree street panorama centered on the feature in your default browser.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>🗺️ OpenStreetMap & Yandex</strong>
+        <span>1-click links to OSM standard cartography or Yandex Maps high-resolution aerial imagery.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>📋 Copy to Clipboard</strong>
+        <span>Copies all formatted attributes of the clicked feature directly into the system clipboard.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>📄 Export HTML Card Report</strong>
+        <span>Renders a standalone, printable HTML portfolio card for the feature and opens it in your browser.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>🔗 Open File / Photo</strong>
+        <span>Opens any local PDF, CAD drawing, document, or photo referenced in an attribute field using the default OS application.</span>
+      </div>
+    </div>
+
+    <div class="callout">
+      <strong>3 Ways to Trigger Injected Layer Actions in QGIS:</strong>
+      <ol>
+        <li><b>Inside the MapTip Card:</b> Hover over a feature and click the action pills (e.g. <code>🛰️ Sat</code>, <code>🚶 Street</code>, <code>📋 Copy</code>) rendered directly inside the card footer.</li>
+        <li><b>On Map Canvas:</b> Click the yellow gear icon (<b>Run Feature Action</b> on the QGIS canvas toolbar or click <b>🎯 Canvas Action Tool</b> in the dock) and click any feature on the map.</li>
+        <li><b>In Attribute Tables:</b> Right-click any row in the Attribute Table or Identify Results panel and select the action from the context menu.</li>
+      </ol>
+    </div>
+  </div>
+
+  <!-- ── Stage 5: TKGM Cadastre ────────────────────────────── -->
+  <div id="cadastre" class="stage-block">
+    <h3>🇹🇷 Stage 5: Instant Canvas Cadastre Picker (Turkey Only)</h3>
+    <p>
+      For urban planners, architects, surveyors, and civil engineers working in the Republic of Turkey, Qgis MapTips includes an interactive 1-click cadastral parcel tool connected to the official <b>TKGM MEGSİS API</b>.
+    </p>
+
+    <div class="stage-steps">
+      <div class="stage-step-item">
+        <strong>1. Activate Canvas Tool</strong>
+        <span>Under Actions Hub, click <b>⚡ Click Canvas to Download Parcel</b>. The cursor becomes an amber reticle target.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>2. Click Anywhere on Map</strong>
+        <span>Click on any building footprint, satellite image, or blank canvas inside Turkey. No vector layer is required.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>3. Instant Polygon Layer</strong>
+        <span>The official boundary geometry is retrieved and added into the <code>TKGM Parselleri (TR)</code> memory layer.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>4. Automatic Styling & Labels</strong>
+        <span>The layer is styled in Cadastral Amber with automatic centered <code>ada_no / parsel_no</code> text labels and text buffer.</span>
+      </div>
+    </div>
+
+    <div class="callout callout-amber">
+      <strong>Fair-Use Notice & Quota:</strong> The official TKGM MEGSİS service enforces an IP-based fair-use rate limit (approximately ~100 requests per day per IP address). If exceeded, the server returns HTTP 403 Forbidden. The plugin handles this gracefully with a clear Turkish notification. Quotas typically reset at midnight. Please see <code>THIRD_PARTY.md</code> for terms of service.
+    </div>
+  </div>
+
+  <!-- ── Stage 6: Live Canvas HUD ──────────────────────────── -->
+  <div id="live-hud" class="stage-block">
+    <h3>🎯 Stage 6: Live Canvas Hover HUD (Raster Inspector)</h3>
+    <p>
+      Working with heavy digital elevation models (DEM), slope rasters, thermal imagery, or multi-spectral satellite orthophotos often requires tedious point sampling with the Identify tool. Live Canvas HUD offers a passive, non-intrusive alternative:
+    </p>
+
+    <ul>
+      <li><b>Real-Time Canvas Inspection:</b> Simply move your mouse across the canvas to sample pixel values continuously.</li>
+      <li><b>Dwell Debouncing (100–1000 ms):</b> Built-in debouncing ensures that fast mouse movements across the screen do not trigger expensive raster pixel fetches, guaranteeing silky smooth 60 FPS canvas panning and zooming.</li>
+      <li><b>Precision Reticle Cursor:</b> Replaces the standard pointer with a high-contrast reticle crosshair and target indicator.</li>
+      <li><b>Stationary Pin/Freeze:</b> Press <b>Shift + Click</b> anywhere on the map to freeze the current tooltip in place so you can read, compare, or copy values without moving your hands.</li>
+      <li><b>Composite Multi-Layer Mode:</b> Inspect multiple visible raster layers plus the top vector polygon attribute in a unified, multi-band inspection card.</li>
+      <li><b>Permanent Dock Console:</b> All sampled values stream into the dock's <b>Live Sampled Values Feed</b> and remain readable even when your mouse leaves QGIS.</li>
+    </ul>
+  </div>
+
+  <!-- ── Stage 7: Processing & Batch Tools ─────────────────── -->
+  <div id="processing" class="stage-block">
+    <h3>⚙️ Stage 7: Processing Algorithms & Batch Automation</h3>
+    <p>
+      Under the QGIS Processing Toolbox (<code>Qgis Advanced Map Tips&Actions</code> provider), two headless algorithms allow enterprise-scale automation:
+    </p>
+
+    <div class="stage-steps">
+      <div class="stage-step-item">
+        <strong>Batch Enhance All Project Vector Layers</strong>
+        <span>Automatically scans all vector layers in your project, detects primary name/label fields, generates styled MapTips, and injects universal actions across the entire workspace in seconds.</span>
+      </div>
+      <div class="stage-step-item">
+        <strong>Export Layer Cards as HTML Portfolio Report</strong>
+        <span>Renders every feature in the selected vector layer into a responsive, standalone HTML atlas catalog. Search, filter, and print to PDF with clean page breaks.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── FAQ & Support ─────────────────────────────────────── -->
+  <div class="stage-block">
+    <h3>❓ Frequently Asked Questions (FAQ)</h3>
+    
+    <p><b>Q: Do clients or colleagues need this plugin installed to view the cards?</b><br>
+    <b>A:</b> No! That is the core superpower of Qgis MapTips. The generated HTML expressions and action configurations write directly to native QGIS layer definitions. Any user opening your <code>.qgz</code> project in standard QGIS will see the styled cards and action pills.</p>
+
+    <p><b>Q: Does this plugin slow down QGIS canvas rendering?</b><br>
+    <b>A:</b> Not at all. All charts are generated as pure nested HTML tables or compact SVG data-URIs. There are zero JavaScript engines, zero Chromium subprocesses, and zero external network calls during normal map browsing.</p>
+
+    <p><b>Q: Is QGIS 4 supported?</b><br>
+    <b>A:</b> Yes. The plugin has been rigorously audited with dual-runtime test harnesses on both QGIS 3.28+ LTR and QGIS 4.2.0, adhering strictly to Qt6 scoped enum guidelines.</p>
+  </div>
+
+  <!-- ── Footer ────────────────────────────────────────────── -->
+  <footer class="page-footer">
+    <div>
+      &copy; 2026 <b>Yusuf Eminoğlu</b> &middot; Published by <b>Geophilo Applied Spatial Labs</b><br>
+      Licensed under <b>GPL-3.0-or-later</b>. Built with pure Python and Qt.
+    </div>
+    <div>
+      <a href="https://plugins.qgis.org/plugins/qgis_maptips/" target="_blank">⭐ Rate on QGIS Hub</a> &middot;
+      <a href="https://gitlab.com/geophilo1/qgis_maptips" target="_blank">GitLab</a> &middot;
+      <a href="https://geophilo.com/">geophilo.com</a>
+    </div>
+  </footer>
+
+</div>
+</body>
+</html>

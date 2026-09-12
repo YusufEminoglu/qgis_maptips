@@ -161,6 +161,27 @@ class QgisMapTipsDock(QDockWidget):
         badge.setObjectName("heroBadge")
         top_row.addLayout(switch_box)
         top_row.addWidget(badge)
+
+        # Quick Manual & Rate Plugin Buttons
+        cursor_hand = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
+        self.btn_manual = QPushButton("📖")
+        self.btn_manual.setObjectName("quietButton")
+        self.btn_manual.setToolTip("Open Quick User Guide & Online Manual (geophilo.com)")
+        self.btn_manual.setFixedSize(22, 22)
+        if cursor_hand is not None:
+            self.btn_manual.setCursor(cursor_hand)
+        self.btn_manual.clicked.connect(self._open_quick_manual)
+
+        self.btn_rate = QPushButton("⭐")
+        self.btn_rate.setObjectName("quietButton")
+        self.btn_rate.setToolTip("Rate Plugin on QGIS Hub (5 Stars)")
+        self.btn_rate.setFixedSize(22, 22)
+        if cursor_hand is not None:
+            self.btn_rate.setCursor(cursor_hand)
+        self.btn_rate.clicked.connect(self._open_rate_plugin)
+
+        top_row.addWidget(self.btn_manual)
+        top_row.addWidget(self.btn_rate)
         hero_layout.addLayout(top_row)
 
         # Single compact row for target layer + refresh + status pill
@@ -1604,6 +1625,24 @@ class QgisMapTipsDock(QDockWidget):
 
     def _on_hud_debounce_changed(self, val: int) -> None:
         self._hud.debounce_ms = val
+
+    def _open_quick_manual(self) -> None:
+        from .quick_manual import QuickManualDialog
+
+        dlg = QuickManualDialog(self)
+        if hasattr(dlg, "exec_"):
+            dlg.exec_()
+        else:
+            dlg.exec()
+
+    def _open_rate_plugin(self) -> None:
+        import webbrowser
+
+        webbrowser.open("https://plugins.qgis.org/plugins/qgis_maptips/")
+        if hasattr(self.iface, "messageBar"):
+            self.iface.messageBar().pushInfo(
+                "Qgis MapTips", "⭐ Thank you for your support! Opening QGIS Plugin Hub review page."
+            )
 
     def unload(self) -> None:
         """Clean up listeners and filters on plugin unload."""

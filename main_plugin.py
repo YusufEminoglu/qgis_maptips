@@ -24,6 +24,8 @@ class QgisMapTipsPlugin:
         self.plugin_dir = os.path.dirname(__file__)
         self.action = None
         self.cadastre_action = None
+        self.manual_action = None
+        self.rate_action = None
         self.about_action = None
         self.dock = None
         self.provider = None
@@ -72,7 +74,17 @@ class QgisMapTipsPlugin:
             with contextlib.suppress(Exception):
                 canvas.mapToolSet.connect(self._on_map_tool_changed)
 
-        # 3. About Action
+        # 3. User Manual & Online Guide Action
+        self.manual_action = QAction("📖 User Manual & Online Guide...", self.iface.mainWindow())
+        self.manual_action.triggered.connect(self._show_manual)
+        self.iface.addPluginToMenu(self.MENU_NAME, self.manual_action)
+
+        # 4. Rate Plugin Action
+        self.rate_action = QAction("⭐ Rate Plugin on QGIS Hub...", self.iface.mainWindow())
+        self.rate_action.triggered.connect(self._rate_plugin)
+        self.iface.addPluginToMenu(self.MENU_NAME, self.rate_action)
+
+        # 5. About Action
         self.about_action = QAction("About Qgis Advanced Map Tips&Actions", self.iface.mainWindow())
         self.about_action.triggered.connect(self._show_about)
         self.iface.addPluginToMenu(self.MENU_NAME, self.about_action)
@@ -111,6 +123,22 @@ class QgisMapTipsPlugin:
             self.action.setParent(None)
             self.action.deleteLater()
             self.action = None
+
+        if self.manual_action is not None:
+            self.iface.removePluginMenu(self.MENU_NAME, self.manual_action)
+            with contextlib.suppress(TypeError):
+                self.manual_action.triggered.disconnect(self._show_manual)
+            self.manual_action.setParent(None)
+            self.manual_action.deleteLater()
+            self.manual_action = None
+
+        if self.rate_action is not None:
+            self.iface.removePluginMenu(self.MENU_NAME, self.rate_action)
+            with contextlib.suppress(TypeError):
+                self.rate_action.triggered.disconnect(self._rate_plugin)
+            self.rate_action.setParent(None)
+            self.rate_action.deleteLater()
+            self.rate_action = None
 
         if self.about_action is not None:
             self.iface.removePluginMenu(self.MENU_NAME, self.about_action)
@@ -215,3 +243,21 @@ class QgisMapTipsPlugin:
             "<p><b>Third-Party Notice:</b> MEGSİS cadastral queries are subject to fair-use rate limits and daily quotas (~100 queries/day). "
             "See <code>THIRD_PARTY.md</code> for full terms and service policies.</p>",
         )
+
+    def _show_manual(self) -> None:
+        from .dialogs.quick_manual import QuickManualDialog
+
+        dlg = QuickManualDialog(self.iface.mainWindow() if self.iface else None)
+        if hasattr(dlg, "exec_"):
+            dlg.exec_()
+        else:
+            dlg.exec()
+
+    def _rate_plugin(self) -> None:
+        import webbrowser
+
+        webbrowser.open("https://plugins.qgis.org/plugins/qgis_maptips/")
+        if self.iface and hasattr(self.iface, "messageBar"):
+            self.iface.messageBar().pushInfo(
+                "Qgis MapTips", "⭐ Thank you for your support! Opening QGIS Plugin Hub review page."
+            )
