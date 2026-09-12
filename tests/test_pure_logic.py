@@ -259,19 +259,31 @@ class TestActionBuilder(unittest.TestCase):
         self.assertIn("tkgm_cadastre", actions_map)
 
         act = actions_map["tkgm_cadastre"]
-        self.assertIn("(Turkey Only)", act["name"])
-        self.assertIn("cbsapi.tkgm.gov.tr/megsiswebapi", act["command"])
-        self.assertIn("QgsNetworkAccessManager", act["command"])
-        self.assertIn("TKGM Parselleri (TR)", act["command"])
+        self.assertIn("Parsel Sorgu", act["name"])
+        self.assertIn("(Turkey Only)", act["description"])
+        self.assertEqual(act["type"], "OpenUrl")
+        self.assertIn("https://parselsorgu.tkgm.gov.tr/#ara/cografi/", act["command"])
 
         # Card buttons ribbon row
         row_html_tkgm = build_card_action_buttons_row(["tkgm_cadastre"], {
             "sub_bg": "#115e59", "sub_text": "#ccfbf1", "row_alt": "#f8fafc", "border": "#e2e8f0", "text_secondary": "#64748b"
         })
-        self.assertIn("&#9889; TKGM (TR)", row_html_tkgm)
-        self.assertNotIn("&#9889; ⚡", row_html_tkgm)
-        self.assertNotIn("⚡ ⚡", row_html_tkgm)
-        self.assertIn("action:tkgm_cadastre", row_html_tkgm)
+        self.assertIn("Parsel Sorgu", row_html_tkgm)
+        self.assertIn("https://parselsorgu.tkgm.gov.tr/#ara/cografi/", row_html_tkgm)
+
+    def test_zoom_and_buffer_actions(self):
+        actions_map = {act["key"]: act for act in AVAILABLE_ACTIONS}
+        self.assertIn("zoom_feature", actions_map)
+        self.assertIn("buffer_feature", actions_map)
+
+        zoom_act = actions_map["zoom_feature"]
+        self.assertIn("is_geo", zoom_act["command"])
+        self.assertIn("canvas.refresh()", zoom_act["command"])
+
+        buf_act = actions_map["buffer_feature"]
+        self.assertIn("Feature Buffers (Temp)", buf_act["command"])
+        self.assertIn("insertLayer", buf_act["command"])
+
 
     def test_card_action_buttons_row_wrapping(self):
         # When 6 buttons are given, they should wrap into rows of max 3 (i.e. at least 2 <tr> rows)

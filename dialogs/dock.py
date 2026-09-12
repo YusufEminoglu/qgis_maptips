@@ -59,9 +59,11 @@ from qgis.core import (
 from ..core.action_builder import (
     AVAILABLE_ACTIONS,
     apply_actions_to_layer,
+    create_feature_buffer,
     get_layer_actions,
     is_layer_alive,
     remove_all_actions,
+    zoom_to_feature,
 )
 from ..core.raster_hud import CanvasHoverHUD, evaluate_vector_feature_maptip
 from ..core.template_engine import (
@@ -1800,6 +1802,10 @@ class QgisMapTipsDock(QDockWidget):
                 icon = "📄"
             elif "intersect" in name_lower:
                 icon = "🔗"
+            elif "zoom" in name_lower:
+                icon = "🔍"
+            elif "buffer" in name_lower:
+                icon = "🎯"
             else:
                 icon = "⚡"
 
@@ -1844,15 +1850,10 @@ class QgisMapTipsDock(QDockWidget):
             self._copy_attributes_of_sample_feature()
         elif "report" in act_name_lower or "export" in act_name_lower:
             self._export_sample_card_report()
-        elif "tkgm" in act_name_lower:
-            self._run_sample_instant_tkgm()
-        elif "zoom" in act_name_lower and feat.hasGeometry() and self.canvas:
-            box = feat.geometry().boundingBox()
-            pad = max(15.0, max(box.width(), box.height()) * 0.15)
-            self.canvas.setExtent(box.buffered(pad))
-            self.canvas.refresh()
-            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
-                self.iface.messageBar().pushSuccess("Qgis MapTips", f"Zoomed to feature ID {feat.id()}.")
+        elif "zoom" in act_name_lower or act_data.get("key") == "zoom_feature":
+            self._zoom_to_sample_feature()
+        elif "buffer" in act_name_lower or act_data.get("key") == "buffer_feature":
+            self._buffer_sample_feature()
         elif "OpenUrl" in act_type or act_type == "0":
             ctx = QgsExpressionContext()
             ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
@@ -1930,14 +1931,81 @@ class QgisMapTipsDock(QDockWidget):
             self._copy_attributes_of_sample_feature()
         elif url_str.startswith("action:export_card_report"):
             self._export_sample_card_report()
-        elif url_str.startswith("action:tkgm_cadastre") or url_str.startswith("action:tkgm_api_instant"):
-            self._run_sample_instant_tkgm()
+        elif url_str.startswith("action:zoom"):
+            self._zoom_to_sample_feature()
+        elif url_str.startswith("action:buffer"):
+            self._buffer_sample_feature()
+        elif url_str.startswith("action:tkgm") or url_str.startswith("action:parsel"):
+            self._open_sample_tkgm_web()
         elif url_str.startswith("action:"):
             key = url_str.split(":", 1)[1]
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushInfo("Qgis MapTips", f"Action '{key}' clicked in preview.")
         else:
             QDesktopServices.openUrl(url)
+
+    def _zoom_to_sample_feature(self) -> None:
+        layer = self._resolve_target_layer()
+        feat = getattr(self, "_current_sample_feat", None)
+        if not feat and isinstance(layer, QgsVectorLayer):
+            sel = layer.selectedFeatures()
+            feat = sel[0] if sel else None
+        if not feat and isinstance(layer, QgsVectorLayer):
+            with contextlib.suppress(Exception):
+                for f in layer.getFeatures():
+                    feat = f
+                    break
+        canvas = self.canvas or (self.iface.mapCanvas() if self.iface else None)
+        if feat and isinstance(layer, QgsVectorLayer) and canvas:
+            zoom_to_feature(canvas, layer, feat, self.iface)
+        elif hasattr(self.iface, "messageBar") and self.iface.messageBar():
+            self.iface.messageBar().pushWarning("Qgis MapTips", "No feature available to zoom to.")
+
+    def _buffer_sample_feature(self) -> None:
+        layer = self._resolve_target_layer()
+        feat = getattr(self, "_current_sample_feat", None)
+        if not feat and isinstance(layer, QgsVectorLayer):
+            sel = layer.selectedFeatures()
+            feat = sel[0] if sel else None
+        if not feat and isinstance(layer, QgsVectorLayer):
+            with contextlib.suppress(Exception):
+                for f in layer.getFeatures():
+                    feat = f
+                    break
+        if feat and isinstance(layer, QgsVectorLayer):
+            create_feature_buffer(layer, feat, 50.0, self.iface)
+        elif hasattr(self.iface, "messageBar") and self.iface.messageBar():
+            self.iface.messageBar().pushWarning("Qgis MapTips", "No feature available to buffer.")
+
+    def _open_sample_tkgm_web(self) -> None:
+        layer = self._resolve_target_layer()
+        feat = getattr(self, "_current_sample_feat", None)
+        if not feat and isinstance(layer, QgsVectorLayer):
+            sel = layer.selectedFeatures()
+            feat = sel[0] if sel else None
+        if not feat and isinstance(layer, QgsVectorLayer):
+            with contextlib.suppress(Exception):
+                for f in layer.getFeatures():
+                    feat = f
+                    break
+        if not feat or not feat.hasGeometry() or not isinstance(layer, QgsVectorLayer):
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushWarning("TKGM Parsel Sorgu", "No feature with valid geometry found to open Parsel Sorgu.")
+            return
+
+        try:
+            pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid()
+            pt = pos.asPoint()
+            tr = QgsCoordinateTransform(layer.crs(), QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
+            wgs = tr.transform(pt)
+            lat, lon = round(wgs.y(), 6), round(wgs.x(), 6)
+            url_str = f"https://parselsorgu.tkgm.gov.tr/#ara/cografi/{lat}/{lon}"
+            QDesktopServices.openUrl(QUrl(url_str))
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushSuccess("TKGM Parsel Sorgu", f"Opened Parsel Sorgu in browser ({lat}, {lon}).")
+        except Exception as exc:
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushWarning("TKGM Parsel Sorgu", f"Could not open Parsel Sorgu: {exc}")
 
     def _copy_attributes_of_sample_feature(self) -> None:
         layer = self._resolve_target_layer()
@@ -2245,15 +2313,8 @@ class QgisMapTipsDock(QDockWidget):
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushInfo("Qgis MapTips", "No feature currently inspected to zoom to.")
             return
-        box = feat.geometry().boundingBox()
-        canvas = self.iface.mapCanvas()
-        canvas_crs = canvas.mapSettings().destinationCrs()
-        if layer.crs() != canvas_crs:
-            tr = QgsCoordinateTransform(layer.crs(), canvas_crs, QgsProject.instance())
-            box = tr.transformBoundingBox(box)
-        pad = max(20.0, max(box.width(), box.height()) * 0.2)
-        canvas.setExtent(box.buffered(pad))
-        canvas.refresh()
+        canvas = self.canvas or (self.iface.mapCanvas() if self.iface else None)
+        zoom_to_feature(canvas, layer, feat, self.iface)
 
     def _on_hud_copy_feature(self) -> None:
         feat = getattr(self._hud, "_current_feature", None)

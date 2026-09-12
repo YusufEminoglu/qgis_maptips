@@ -310,10 +310,12 @@ def build_card_action_buttons_row(action_keys: list[str], pal: dict[str, str], c
         "google_streetview": "&#128205;",
         "openstreetmap": "&#128506;",
         "yandex_maps": "&#129517;",
-        "tkgm_cadastre": "&#9889;",
-        "tkgm_api_instant": "&#9889;",
+        "tkgm_cadastre": "&#127963;",
+        "tkgm_api_instant": "&#127963;",
         "copy_clipboard": "&#128203;",
         "export_card_report": "&#128196;",
+        "zoom_feature": "&#128269;",
+        "buffer_feature": "&#9678;",
     }
 
     # Normalize keys to deduplicate any legacy tkgm_api_instant and tkgm_cadastre

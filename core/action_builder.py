@@ -35,6 +35,107 @@ def is_layer_alive(layer: Any) -> bool:
         return False
 
 
+def zoom_to_feature(canvas: Any, layer: Any, feat: Any, iface: Any = None) -> bool:
+    """Zoom and center map canvas to feature with CRS-aware adaptive padding."""
+    if not canvas or not is_layer_alive(layer) or not feat:
+        return False
+    if not hasattr(feat, "hasGeometry") or not feat.hasGeometry() or feat.geometry().isEmpty():
+        return False
+
+    try:
+        from qgis.core import QgsCoordinateTransform, QgsProject
+        geom = feat.geometry()
+        box = geom.boundingBox()
+        dest_crs = canvas.mapSettings().destinationCrs() if hasattr(canvas, "mapSettings") else layer.crs()
+        if layer.crs() != dest_crs:
+            with contextlib.suppress(Exception):
+                tr = QgsCoordinateTransform(layer.crs(), dest_crs, QgsProject.instance())
+                box = tr.transformBoundingBox(box)
+
+        is_geo = dest_crs.isGeographic() if hasattr(dest_crs, "isGeographic") else False
+        max_dim = max(box.width(), box.height())
+        if is_geo:
+            pad = max(0.001, max_dim * 0.25)
+        else:
+            pad = max(30.0, max_dim * 0.25)
+
+        canvas.setExtent(box.buffered(pad))
+        canvas.refresh()
+        if iface and hasattr(iface, "messageBar") and iface.messageBar():
+            fid = feat.id() if hasattr(feat, "id") else ""
+            iface.messageBar().pushSuccess("Qgis MapTips", f"Zoomed to feature {fid}.")
+        return True
+    except Exception:
+        return False
+
+
+def create_feature_buffer(layer: Any, feat: Any, dist_m: float = 50.0, iface: Any = None) -> bool:
+    """Generate a spatial buffer polygon into a temporary memory layer with CRS awareness."""
+    if not is_layer_alive(layer) or not feat:
+        return False
+    if not hasattr(feat, "hasGeometry") or not feat.hasGeometry() or feat.geometry().isEmpty():
+        return False
+
+    try:
+        import math
+        from qgis.PyQt.QtGui import QColor
+        from qgis.core import QgsFeature, QgsProject, QgsVectorLayer
+
+        geom = feat.geometry()
+        if layer.crs().isGeographic():
+            pt = geom.centroid().asPoint() if not geom.centroid().isEmpty() else None
+            lat = pt.y() if pt else 39.0
+            meters_per_deg = 111320.0 * max(0.2, math.cos(math.radians(lat)))
+            dist_crs = dist_m / meters_per_deg
+        else:
+            dist_crs = dist_m
+
+        buf_geom = geom.buffer(dist_crs, 24)
+        if not buf_geom or buf_geom.isEmpty():
+            return False
+
+        layers = QgsProject.instance().mapLayersByName("Feature Buffers (Temp)")
+        b_layer = layers[0] if layers and is_layer_alive(layers[0]) else None
+        if not b_layer:
+            uri = f"Polygon?crs={layer.crs().authid()}&field=src_id:string(30)&field=src_layer:string(80)&field=dist_m:double"
+            b_layer = QgsVectorLayer(uri, "Feature Buffers (Temp)", "memory")
+            b_layer.setOpacity(0.55)
+            sym = b_layer.renderer().symbol() if b_layer.renderer() else None
+            if sym:
+                sym.setColor(QColor(6, 182, 212, 60))
+                if sym.symbolLayerCount() > 0:
+                    sym.symbolLayer(0).setStrokeColor(QColor(8, 145, 178))
+                    sym.symbolLayer(0).setStrokeWidth(0.8)
+            QgsProject.instance().addMapLayer(b_layer, False)
+            root = QgsProject.instance().layerTreeRoot()
+            if root:
+                root.insertLayer(0, b_layer)
+            else:
+                QgsProject.instance().addMapLayer(b_layer)
+
+        f_new = QgsFeature(b_layer.fields())
+        f_new.setGeometry(buf_geom)
+        fid_str = str(feat.id()) if hasattr(feat, "id") else ""
+        layer_name = layer.name() if hasattr(layer, "name") else ""
+        f_new.setAttributes([fid_str, layer_name, float(dist_m)])
+        b_layer.dataProvider().addFeatures([f_new])
+        b_layer.updateExtents()
+        b_layer.triggerRepaint()
+
+        canvas = iface.mapCanvas() if (iface and hasattr(iface, "mapCanvas")) else None
+        if canvas:
+            canvas.refresh()
+
+        if iface and hasattr(iface, "messageBar") and iface.messageBar():
+            iface.messageBar().pushSuccess(
+                "Qgis MapTips", f"Created {dist_m:.0f}m buffer in 'Feature Buffers (Temp)' layer."
+            )
+        return True
+    except Exception:
+        return False
+
+
+
 # Dynamic WGS84 coordinates that automatically resolve layer CRS, handle Turkish/European decimal commas, and guarantee point on surface
 LAT_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometry), centroid($geometry)), coalesce(@layer_crs, 'EPSG:4326'), 'EPSG:4326'), coalesce(to_string(round(y(@wgs), 6)), '0.0')) %]"
 LON_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometry), centroid($geometry)), coalesce(@layer_crs, 'EPSG:4326'), 'EPSG:4326'), coalesce(to_string(round(x(@wgs), 6)), '0.0')) %]"
@@ -206,11 +307,11 @@ AVAILABLE_ACTIONS = [
     },
     {
         "key": "tkgm_cadastre",
-        "name": "TKGM Instant Cadastre (Turkey Only)",
-        "short_title": "TKGM (TR)",
-        "type": "GenericPython",
-        "command": TKGM_INSTANT_QUERY_PYTHON_CODE,
-        "description": "Instant official cadastral query via MEGSIS API: adds parcel boundary to map & copies details (Turkey Only)",
+        "name": "TKGM Parsel Sorgu (Web)",
+        "short_title": "Parsel Sorgu",
+        "type": "OpenUrl",
+        "command": f"https://parselsorgu.tkgm.gov.tr/#ara/cografi/{LAT_EXPR}/{LON_EXPR}",
+        "description": "Open location in official TKGM Parsel Sorgu web portal (Turkey Only)",
     },
     {
         "key": "copy_clipboard",
@@ -236,15 +337,19 @@ AVAILABLE_ACTIONS = [
         "command": (
             "from qgis.core import QgsProject, QgsCoordinateTransform; from qgis.utils import iface; "
             "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
+            "if not layer and iface: layer = iface.activeLayer(); "
             "feat = layer.getFeature([% $id %]) if layer else None; "
+            "if not feat and layer: sel = layer.selectedFeatures(); feat = sel[0] if sel else None; "
             "if feat and feat.hasGeometry() and iface: "
-            "    geom = feat.geometry(); "
-            "    box = geom.boundingBox(); "
             "    canvas = iface.mapCanvas(); "
-            "    if layer.crs() != canvas.mapSettings().destinationCrs(): "
-            "        tr = QgsCoordinateTransform(layer.crs(), canvas.mapSettings().destinationCrs(), QgsProject.instance()); "
+            "    dest_crs = canvas.mapSettings().destinationCrs(); "
+            "    box = feat.geometry().boundingBox(); "
+            "    if layer.crs() != dest_crs: "
+            "        tr = QgsCoordinateTransform(layer.crs(), dest_crs, QgsProject.instance()); "
             "        box = tr.transformBoundingBox(box); "
-            "    pad = max(15.0, max(box.width(), box.height()) * 0.15); "
+            "    is_geo = dest_crs.isGeographic(); "
+            "    max_dim = max(box.width(), box.height()); "
+            "    pad = max(0.001, max_dim * 0.25) if is_geo else max(30.0, max_dim * 0.25); "
             "    canvas.setExtent(box.buffered(pad)); "
             "    canvas.refresh()"
         ),
@@ -256,25 +361,41 @@ AVAILABLE_ACTIONS = [
         "short_title": "Buffer",
         "type": "GenericPython",
         "command": (
-            "from qgis.core import QgsProject, QgsVectorLayer, QgsFeature; from qgis.utils import iface; "
+            "import math; from qgis.core import QgsProject, QgsVectorLayer, QgsFeature; "
+            "from qgis.PyQt.QtGui import QColor; from qgis.utils import iface; "
             "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
+            "if not layer and iface: layer = iface.activeLayer(); "
             "feat = layer.getFeature([% $id %]) if layer else None; "
+            "if not feat and layer: sel = layer.selectedFeatures(); feat = sel[0] if sel else None; "
             "if feat and feat.hasGeometry(): "
-            "    dist = 50.0 / 111320.0 if layer.crs().isGeographic() else 50.0; "
-            "    buf_geom = feat.geometry().buffer(dist, 16); "
+            "    geom = feat.geometry(); "
+            "    if layer.crs().isGeographic(): "
+            "        pt = geom.centroid().asPoint() if not geom.centroid().isEmpty() else None; "
+            "        lat = pt.y() if pt else 39.0; "
+            "        m_deg = 111320.0 * max(0.2, math.cos(math.radians(lat))); "
+            "        dist = 50.0 / m_deg; "
+            "    else: "
+            "        dist = 50.0; "
+            "    buf_geom = geom.buffer(dist, 24); "
             "    layers = QgsProject.instance().mapLayersByName('Feature Buffers (Temp)'); "
             "    b_layer = layers[0] if layers else None; "
             "    if not b_layer: "
-            "        uri = f'Polygon?crs={layer.crs().authid()}&field=src_id:string(20)&field=dist_m:double'; "
+            "        uri = f'Polygon?crs={layer.crs().authid()}&field=src_id:string(30)&field=dist_m:double'; "
             "        b_layer = QgsVectorLayer(uri, 'Feature Buffers (Temp)', 'memory'); "
-            "        b_layer.setOpacity(0.45); "
-            "        QgsProject.instance().addMapLayer(b_layer); "
+            "        b_layer.setOpacity(0.55); "
+            "        sym = b_layer.renderer().symbol() if b_layer.renderer() else None; "
+            "        if sym: sym.setColor(QColor(6, 182, 212, 60)); sym.symbolLayer(0).setStrokeColor(QColor(8, 145, 178)); sym.symbolLayer(0).setStrokeWidth(0.8); "
+            "        QgsProject.instance().addMapLayer(b_layer, False); "
+            "        root = QgsProject.instance().layerTreeRoot(); "
+            "        root.insertLayer(0, b_layer) if root else QgsProject.instance().addMapLayer(b_layer); "
             "    f_new = QgsFeature(b_layer.fields()); "
             "    f_new.setGeometry(buf_geom); "
             "    f_new.setAttributes([str(feat.id()), 50.0]); "
             "    b_layer.dataProvider().addFeatures([f_new]); "
+            "    b_layer.updateExtents(); "
             "    b_layer.triggerRepaint(); "
-            "    iface.messageBar().pushInfo('Qgis MapTips', 'Created 50m buffer polygon in temporary layer.') if hasattr(iface, 'messageBar') else None"
+            "    iface.mapCanvas().refresh() if iface else None; "
+            "    iface.messageBar().pushSuccess('Qgis MapTips', 'Created 50m buffer in Feature Buffers (Temp) layer.') if hasattr(iface, 'messageBar') else None"
         ),
         "description": "Generate a 50m spatial buffer polygon into a temporary memory layer",
     },
@@ -534,45 +655,32 @@ class ActionUrlHandler(QObject):
                     "Qgis MapTips", "No feature available to export report from."
                 )
 
-        elif "tkgm_cadastre" in action_key or "tkgm_api_instant" in action_key:
+        elif "zoom" in action_key:
             if feat and layer:
-                from .cadastre_tool import (
-                    add_parcel_feature,
-                    get_or_create_cadastre_layer,
-                    is_in_turkey_bounds,
-                    parse_tkgm_response,
-                    query_tkgm_megsis,
-                )
-                if not feat.hasGeometry():
-                    return
+                canvas = self.iface.mapCanvas() if (self.iface and hasattr(self.iface, "mapCanvas")) else None
+                zoom_to_feature(canvas, layer, feat, self.iface)
+            elif self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushWarning("Qgis MapTips", "No feature available to zoom to.")
+
+        elif "buffer" in action_key:
+            if feat and layer:
+                create_feature_buffer(layer, feat, 50.0, self.iface)
+            elif self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushWarning("Qgis MapTips", "No feature available to buffer.")
+
+        elif "tkgm" in action_key or "parsel" in action_key:
+            if feat and layer and feat.hasGeometry():
                 pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid()
                 pt = pos.asPoint()
                 tr = QgsCoordinateTransform(layer.crs(), QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
                 wgs = tr.transform(pt)
                 lat, lon = round(wgs.y(), 6), round(wgs.x(), 6)
-                if not is_in_turkey_bounds(lat, lon):
-                    if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
-                        self.iface.messageBar().pushWarning("TKGM Cadastre", f"Coordinates ({lat}, {lon}) fall outside Turkey bounds.")
-                    return
-                success, data, err_msg = query_tkgm_megsis(lat, lon)
-                if not success:
-                    if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
-                        self.iface.messageBar().pushWarning("TKGM Cadastre", f"TKGM sorgusu başarısız: {err_msg}")
-                    return
-                parcel_info = parse_tkgm_response(data)
-                if not parcel_info:
-                    if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
-                        self.iface.messageBar().pushWarning("TKGM Cadastre", "Belirtilen koordinatta resmi parsel bulunamadı.")
-                    return
-                summary = (
-                    f"TKGM: {parcel_info['il']} / {parcel_info['ilce']} / {parcel_info['mahalle']} | "
-                    f"Ada: {parcel_info['ada_no']}, Parsel: {parcel_info['parsel_no']} | "
-                    f"Alan: {parcel_info['alan_m2']} m² | {parcel_info['nitelik']}"
-                )
-                QApplication.clipboard().setText(summary)
-                cadastre_layer = get_or_create_cadastre_layer(QgsProject.instance())
-                is_new, msg, _ = add_parcel_feature(cadastre_layer, parcel_info)
+                url_web = f"https://parselsorgu.tkgm.gov.tr/#ara/cografi/{lat}/{lon}"
+                QDesktopServices.openUrl(QUrl(url_web))
                 if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
-                    self.iface.messageBar().pushSuccess("TKGM Cadastre", f"🏛️ {summary} ({msg})")
+                    self.iface.messageBar().pushSuccess("TKGM Parsel Sorgu", f"Opened TKGM Parsel Sorgu in browser ({lat}, {lon}).")
+            elif self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushWarning("TKGM Parsel Sorgu", "No feature with valid geometry found to open Parsel Sorgu.")
+
 
 

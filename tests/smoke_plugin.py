@@ -201,6 +201,27 @@ def test_layer_removal_safety(iface):
     return _ok("dock safely handles layer removal without SIP RuntimeError", True)
 
 
+def test_zoom_and_buffer_logic(iface):
+    from qgis.core import QgsFeature, QgsGeometry, QgsPointXY, QgsProject, QgsVectorLayer
+    from qgis_maptips.core.action_builder import create_feature_buffer, zoom_to_feature
+
+    lyr = QgsVectorLayer("Point?crs=EPSG:4326&field=name:string", "Test Zoom Buffer", "memory")
+    f = QgsFeature(lyr.fields())
+    f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(32.85, 39.93)))
+    f.setAttributes(["Ankara"])
+    lyr.dataProvider().addFeatures([f])
+    QgsProject.instance().addMapLayer(lyr)
+
+    feat = next(lyr.getFeatures())
+    z_ok = zoom_to_feature(iface.mapCanvas(), lyr, feat, iface)
+    b_ok = create_feature_buffer(lyr, feat, 50.0, iface)
+
+    buf_layers = QgsProject.instance().mapLayersByName("Feature Buffers (Temp)")
+    has_buf_layer = len(buf_layers) > 0 and buf_layers[0].featureCount() > 0
+
+    return _ok("zoom_to_feature and create_feature_buffer execution", z_ok and b_ok and has_buf_layer)
+
+
 def run_all(iface):
     print("=" * 60)
     print(" qgis_maptips - lifecycle & core smoke tests")
@@ -213,6 +234,7 @@ def run_all(iface):
         test_maptip_injection(),
         test_action_injection(),
         test_processing_provider(),
+        test_zoom_and_buffer_logic(iface),
     ]
     passed = sum(1 for r in results if r)
     print("-" * 60)
