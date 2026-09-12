@@ -988,7 +988,15 @@ class QgisMapTipsDock(QDockWidget):
     # ──────────────────────────────────────────────────────────────────────────
 
     def _refresh_layers(self) -> None:
-        prev_id = self.layer_combo.currentData()
+        target_id = None
+        active_lyr = self.iface.activeLayer() if hasattr(self.iface, "activeLayer") else None
+        if active_lyr and active_lyr.isValid():
+            target_id = active_lyr.id()
+        elif hasattr(self, "_current_layer") and self._current_layer and self._current_layer.isValid():
+            target_id = self._current_layer.id()
+        else:
+            target_id = self.layer_combo.currentData()
+
         self.layer_combo.blockSignals(True)
         self.rel_layer_combo.blockSignals(True)
         self.sel_layer_combo.blockSignals(True)
@@ -1009,19 +1017,81 @@ class QgisMapTipsDock(QDockWidget):
         self.rel_layer_combo.blockSignals(False)
         self.sel_layer_combo.blockSignals(False)
 
-        idx = self.layer_combo.findData(prev_id)
-        if idx >= 0:
-            self.layer_combo.setCurrentIndex(idx)
-        elif self.layer_combo.count() > 0:
-            self.layer_combo.setCurrentIndex(0)
+        if self.layer_combo.count() > 0:
+            target_idx = -1
+            if target_id:
+                target_idx = self.layer_combo.findData(target_id)
+            if target_idx < 0:
+                for i in range(self.layer_combo.count()):
+                    lyr = QgsProject.instance().mapLayer(self.layer_combo.itemData(i))
+                    if isinstance(lyr, QgsVectorLayer):
+                        target_idx = i
+                        break
+                if target_idx < 0:
+                    target_idx = 0
+
+            if self.layer_combo.currentIndex() != target_idx:
+                self.layer_combo.setCurrentIndex(target_idx)
+            # Crucial: Always explicitly invoke _on_target_layer_selected.
+            # In Qt, if target_idx == currentIndex (e.g. 0 when 1 item exists),
+            # setCurrentIndex does not emit currentIndexChanged!
+            self._on_target_layer_selected(target_idx)
         else:
             self._on_target_layer_selected(-1)
 
     def _on_qgis_active_layer_changed(self, layer: Optional[QgsMapLayer]) -> None:
-        if layer:
+        if layer and layer.isValid():
             idx = self.layer_combo.findData(layer.id())
-            if idx >= 0 and idx != self.layer_combo.currentIndex():
-                self.layer_combo.setCurrentIndex(idx)
+            if idx >= 0:
+                if idx != self.layer_combo.currentIndex():
+                    self.layer_combo.setCurrentIndex(idx)
+                elif self._current_layer is None or (hasattr(self._current_layer, "id") and self._current_layer.id() != layer.id()):
+                    self._on_target_layer_selected(idx)
+            else:
+                self._refresh_layers()
+
+    def _resolve_target_layer(self) -> Optional[QgsVectorLayer]:
+        """Defensively resolves and guarantees an active vector layer is bound if available."""
+        if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+            return self._current_layer
+
+        if hasattr(self.iface, "activeLayer"):
+            act = self.iface.activeLayer()
+            if isinstance(act, QgsVectorLayer) and act.isValid():
+                idx = self.layer_combo.findData(act.id())
+                if idx >= 0:
+                    if self.layer_combo.currentIndex() != idx:
+                        self.layer_combo.setCurrentIndex(idx)
+                    self._on_target_layer_selected(idx)
+                    if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+                        return self._current_layer
+                    return act
+                else:
+                    self._refresh_layers()
+                    if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+                        return self._current_layer
+
+        if self.layer_combo.count() > 0:
+            idx = self.layer_combo.currentIndex()
+            if idx < 0:
+                idx = 0
+            lyr_id = self.layer_combo.itemData(idx) or self.layer_combo.currentData()
+            if lyr_id:
+                lyr = QgsProject.instance().mapLayer(lyr_id)
+                if isinstance(lyr, QgsVectorLayer) and lyr.isValid():
+                    self._on_target_layer_selected(idx)
+                    return lyr
+
+            for i in range(self.layer_combo.count()):
+                lid = self.layer_combo.itemData(i)
+                if lid:
+                    lyr = QgsProject.instance().mapLayer(lid)
+                    if isinstance(lyr, QgsVectorLayer) and lyr.isValid():
+                        self.layer_combo.setCurrentIndex(i)
+                        self._on_target_layer_selected(i)
+                        return lyr
+
+        return None
 
     def _on_target_layer_selected(self, index: int) -> None:
         if hasattr(self, "_current_layer") and isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
@@ -1034,8 +1104,8 @@ class QgisMapTipsDock(QDockWidget):
             self._update_preview()
             return
 
-        lyr_id = self.layer_combo.currentData()
-        layer = QgsProject.instance().mapLayer(lyr_id)
+        lyr_id = self.layer_combo.itemData(index) if 0 <= index < self.layer_combo.count() else self.layer_combo.currentData()
+        layer = QgsProject.instance().mapLayer(lyr_id) if lyr_id else None
         self._current_layer = layer
 
         if not layer or not layer.isValid():
@@ -1100,6 +1170,8 @@ class QgisMapTipsDock(QDockWidget):
             self.file_field_combo,
             self.cond_field_combo,
         ]
+        prev_selections = {cb: (cb.currentData() or cb.currentText()) for cb in combos}
+
         for cb in combos:
             cb.blockSignals(True)
             cb.clear()
@@ -1109,6 +1181,7 @@ class QgisMapTipsDock(QDockWidget):
         self.attrs_list.clear()
 
         fields = layer.fields()
+        field_names = fields.names()
         for f in fields:
             name = f.name()
             for cb in combos:
@@ -1122,52 +1195,80 @@ class QgisMapTipsDock(QDockWidget):
         # Cache sample features for responsive live card testing
         self._reload_sample_features()
 
-        for name in fields.names():
-            nl = name.lower()
-            if any(k in nl for k in ("ad", "name", "title", "id", "label")):
-                self.title_field_combo.setCurrentText(name)
-                break
+        # Restore title field or apply heuristic
+        prev_title = prev_selections.get(self.title_field_combo)
+        if prev_title and prev_title in field_names:
+            self.title_field_combo.setCurrentText(prev_title)
+        else:
+            for name in field_names:
+                nl = name.lower()
+                if any(k in nl for k in ("ad", "name", "title", "id", "label")):
+                    self.title_field_combo.setCurrentText(name)
+                    break
 
-        for name in fields.names():
-            nl = name.lower()
-            if any(k in nl for k in ("tip", "tur", "type", "fonksiyon", "class", "kat", "status", "kategori")):
-                self.sub_field_combo.setCurrentText(name)
-                break
+        # Restore subtitle field or apply heuristic
+        prev_sub = prev_selections.get(self.sub_field_combo)
+        if prev_sub and prev_sub in field_names:
+            self.sub_field_combo.setCurrentText(prev_sub)
+        else:
+            for name in field_names:
+                nl = name.lower()
+                if any(k in nl for k in ("tip", "tur", "type", "fonksiyon", "class", "kat", "status", "kategori")):
+                    self.sub_field_combo.setCurrentText(name)
+                    break
 
-        for name in fields.names():
-            nl = name.lower()
-            if any(k in nl for k in ("alan", "area", "skor", "score", "fiyat", "price", "deger", "count", "kapasite", "capacity", "nufus", "pop")):
-                self.kpi_field_combo.setCurrentText(name)
-                self.cond_field_combo.setCurrentText(name)
-                if not self.kpi_label_edit.text():
-                    if any(k in nl for k in ("alan", "area")):
-                        self.kpi_label_edit.setText("Surface Area")
-                        self.kpi_unit_edit.setText("m²")
-                    elif any(k in nl for k in ("fiyat", "price", "deger")):
-                        self.kpi_label_edit.setText("Market Valuation")
-                        self.kpi_unit_edit.setText("$")
-                    elif any(k in nl for k in ("kapasite", "capacity")):
-                        self.kpi_label_edit.setText("Capacity")
-                        self.kpi_unit_edit.setText("units")
-                    elif any(k in nl for k in ("nufus", "pop")):
-                        self.kpi_label_edit.setText("Population")
-                        self.kpi_unit_edit.setText("inh.")
-                    elif any(k in nl for k in ("skor", "score")):
-                        self.kpi_label_edit.setText("Index Score")
-                        self.kpi_unit_edit.setText("pts")
-                break
+        # Restore KPI & condition fields or apply heuristic
+        prev_kpi = prev_selections.get(self.kpi_field_combo)
+        if prev_kpi and prev_kpi in field_names:
+            self.kpi_field_combo.setCurrentText(prev_kpi)
+            prev_cond = prev_selections.get(self.cond_field_combo)
+            if prev_cond and prev_cond in field_names:
+                self.cond_field_combo.setCurrentText(prev_cond)
+        else:
+            for name in field_names:
+                nl = name.lower()
+                if any(k in nl for k in ("alan", "area", "skor", "score", "fiyat", "price", "deger", "count", "kapasite", "capacity", "nufus", "pop")):
+                    self.kpi_field_combo.setCurrentText(name)
+                    self.cond_field_combo.setCurrentText(name)
+                    if not self.kpi_label_edit.text():
+                        if any(k in nl for k in ("alan", "area")):
+                            self.kpi_label_edit.setText("Surface Area")
+                            self.kpi_unit_edit.setText("m²")
+                        elif any(k in nl for k in ("fiyat", "price", "deger")):
+                            self.kpi_label_edit.setText("Market Valuation")
+                            self.kpi_unit_edit.setText("$")
+                        elif any(k in nl for k in ("kapasite", "capacity")):
+                            self.kpi_label_edit.setText("Capacity")
+                            self.kpi_unit_edit.setText("units")
+                        elif any(k in nl for k in ("nufus", "pop")):
+                            self.kpi_label_edit.setText("Population")
+                            self.kpi_unit_edit.setText("inh.")
+                        elif any(k in nl for k in ("skor", "score")):
+                            self.kpi_label_edit.setText("Index Score")
+                            self.kpi_unit_edit.setText("pts")
+                    break
 
-        for name in fields.names():
-            nl = name.lower()
-            if any(k in nl for k in ("foto", "photo", "image", "resim", "img", "media", "url")):
-                self.media_field_combo.setCurrentText(name)
-                break
+        # Restore media field or apply heuristic
+        prev_media = prev_selections.get(self.media_field_combo)
+        if prev_media and prev_media in field_names:
+            self.media_field_combo.setCurrentText(prev_media)
+        else:
+            for name in field_names:
+                nl = name.lower()
+                if any(k in nl for k in ("foto", "photo", "image", "resim", "img", "media", "url")):
+                    self.media_field_combo.setCurrentText(name)
+                    break
 
-        for name in fields.names():
-            nl = name.lower()
-            if any(k in nl for k in ("file", "dosya", "doc", "pdf", "link", "url", "web")):
-                self.file_field_combo.setCurrentText(name)
-                break
+        # Restore file field or apply heuristic
+        prev_file = prev_selections.get(self.file_field_combo)
+        if prev_file and prev_file in field_names:
+            self.file_field_combo.setCurrentText(prev_file)
+        else:
+            for name in field_names:
+                nl = name.lower()
+                if any(k in nl for k in ("file", "dosya", "doc", "pdf", "link", "url", "web")):
+                    self.file_field_combo.setCurrentText(name)
+                    break
 
         for cb in combos:
             cb.blockSignals(False)
@@ -1464,9 +1565,10 @@ class QgisMapTipsDock(QDockWidget):
         if hasattr(self, "expr_box"):
             self.expr_box.setPlainText(raw_html)
 
-        if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+        layer = self._resolve_target_layer()
+        if isinstance(layer, QgsVectorLayer) and layer.isValid():
             sample_feature = None
-            has_selection = bool(self._current_layer.selectedFeatureCount() > 0)
+            has_selection = bool(layer.selectedFeatureCount() > 0)
             if getattr(self, "_sample_features", []):
                 idx = max(0, min(getattr(self, "_sample_feat_index", 0), len(self._sample_features) - 1))
                 sample_feature = self._sample_features[idx]
@@ -1481,12 +1583,12 @@ class QgisMapTipsDock(QDockWidget):
                     elif hasattr(QgsFeatureRequest, "NoGeometry"):
                         req.setFlags(QgsFeatureRequest.NoGeometry)
                     req.setLimit(1)
-                    for feat in self._current_layer.getFeatures(req):
+                    for feat in layer.getFeatures(req):
                         sample_feature = feat
                         break
                 if not sample_feature:
                     with contextlib.suppress(Exception):
-                        for feat in self._current_layer.getFeatures():
+                        for feat in layer.getFeatures():
                             sample_feature = feat
                             break
                 if sample_feature and hasattr(self, "feat_nav_lbl"):
@@ -1494,9 +1596,9 @@ class QgisMapTipsDock(QDockWidget):
 
             # If layer has no features or features could not be read, synthesize a clean schema-matched mock feature
             if not sample_feature:
-                mock_feat = QgsFeature(self._current_layer.fields())
+                mock_feat = QgsFeature(layer.fields())
                 mock_feat.setValid(True)
-                for f in self._current_layer.fields():
+                for f in layer.fields():
                     fname = f.name()
                     fn_lower = fname.lower()
                     type_lower = f.typeName().lower()
@@ -1523,7 +1625,7 @@ class QgisMapTipsDock(QDockWidget):
 
             self._current_sample_feat = sample_feature
             ctx = QgsExpressionContext()
-            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(self._current_layer))
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
             ctx.setFeature(sample_feature)
             evaluated_html = QgsExpression.replaceExpressionText(raw_html, ctx)
             centered_html = f'<div align="center" style="margin:4px auto; padding:2px;">{evaluated_html}</div>'
@@ -1580,31 +1682,34 @@ class QgisMapTipsDock(QDockWidget):
         self._sync_cursor_state()
 
     def _apply_maptip_to_layer(self) -> None:
-        if not isinstance(self._current_layer, QgsVectorLayer):
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer):
             QMessageBox.warning(self, "Qgis MapTips", "Please select a vector layer to apply the MapTip.")
             return
 
         config = self._build_config_from_ui()
         compiled_html = compile_maptip_html(config)
-        self._current_layer.setMapTipTemplate(compiled_html)
+        layer.setMapTipTemplate(compiled_html)
 
         if hasattr(self.iface, "messageBar"):
             self.iface.messageBar().pushSuccess(
-                "Qgis MapTips", f"MapTip applied successfully to '{self._current_layer.name()}'."
+                "Qgis MapTips", f"MapTip applied successfully to '{layer.name()}'."
             )
         else:
             QMessageBox.information(self, "Qgis MapTips", "MapTip applied successfully!")
 
     def _clear_maptip_from_layer(self) -> None:
-        if isinstance(self._current_layer, QgsVectorLayer):
-            self._current_layer.setMapTipTemplate("")
+        layer = self._resolve_target_layer()
+        if isinstance(layer, QgsVectorLayer):
+            layer.setMapTipTemplate("")
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushInfo(
-                    "Qgis MapTips", f"MapTip cleared from '{self._current_layer.name()}'."
+                    "Qgis MapTips", f"MapTip cleared from '{layer.name()}'."
                 )
 
     def _apply_actions(self) -> None:
-        if not isinstance(self._current_layer, QgsVectorLayer):
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer):
             QMessageBox.warning(self, "Qgis MapTips", "Please select a vector layer to inject actions.")
             return
 
@@ -1618,7 +1723,7 @@ class QgisMapTipsDock(QDockWidget):
             selected_keys.append("select_intersects")
 
         count = apply_actions_to_layer(
-            self._current_layer,
+            layer,
             selected_keys,
             file_field=file_field,
             intersect_target_layer=intersect_tgt,
@@ -1631,10 +1736,10 @@ class QgisMapTipsDock(QDockWidget):
             with contextlib.suppress(Exception):
                 cfg = self._build_config_from_ui()
                 html_text = compile_maptip_html(cfg)
-                self._current_layer.setMapTipTemplate(html_text)
+                layer.setMapTipTemplate(html_text)
 
         msg = (
-            f"{count} actions added to layer '{self._current_layer.name()}'.\n"
+            f"{count} actions added to layer '{layer.name()}'.\n"
             f"Active scopes: Canvas, Feature, Field, Layer, Form."
         )
         if hasattr(self.iface, "messageBar"):
@@ -1646,16 +1751,17 @@ class QgisMapTipsDock(QDockWidget):
         if not hasattr(self, "active_actions_list"):
             return
         self.active_actions_list.clear()
-        if not isinstance(self._current_layer, QgsVectorLayer) or not self._current_layer.isValid():
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
             self.active_actions_header.setText("Select a valid vector layer to view active actions")
             return
 
-        actions = get_layer_actions(self._current_layer)
+        actions = get_layer_actions(layer)
         if not actions:
-            self.active_actions_header.setText(f"No actions currently attached to '{self._current_layer.name()}'. Click 'Inject' above.")
+            self.active_actions_header.setText(f"No actions currently attached to '{layer.name()}'. Click 'Inject' above.")
             return
 
-        self.active_actions_header.setText(f"Active on '{self._current_layer.name()}' ({len(actions)} actions):")
+        self.active_actions_header.setText(f"Active on '{layer.name()}' ({len(actions)} actions):")
         for act in actions:
             name_lower = act["name"].lower()
             if "satellite" in name_lower or "google" in name_lower:
@@ -1685,7 +1791,8 @@ class QgisMapTipsDock(QDockWidget):
             self.active_actions_list.addItem(item)
 
     def _on_run_selected_action(self) -> None:
-        if not isinstance(self._current_layer, QgsVectorLayer):
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer):
             QMessageBox.warning(self, "Qgis MapTips", "Please select a vector layer.")
             return
 
@@ -1696,12 +1803,12 @@ class QgisMapTipsDock(QDockWidget):
 
         act_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
         feat = getattr(self, "_current_sample_feat", None)
-        if not feat and isinstance(self._current_layer, QgsVectorLayer):
-            sel = self._current_layer.selectedFeatures()
+        if not feat and isinstance(layer, QgsVectorLayer):
+            sel = layer.selectedFeatures()
             feat = sel[0] if sel else None
-        if not feat and isinstance(self._current_layer, QgsVectorLayer):
+        if not feat and isinstance(layer, QgsVectorLayer):
             with contextlib.suppress(Exception):
-                for f in self._current_layer.getFeatures():
+                for f in layer.getFeatures():
                     feat = f
                     break
 
@@ -1728,7 +1835,7 @@ class QgisMapTipsDock(QDockWidget):
                 self.iface.messageBar().pushSuccess("Qgis MapTips", f"Zoomed to feature ID {feat.id()}.")
         elif "OpenUrl" in act_type or act_type == "0":
             ctx = QgsExpressionContext()
-            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(self._current_layer))
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
             ctx.setFeature(feat)
             expanded_url = QgsExpression.replaceExpressionText(cmd, ctx)
             QDesktopServices.openUrl(QUrl(expanded_url.strip()))
@@ -1738,7 +1845,7 @@ class QgisMapTipsDock(QDockWidget):
                 )
         else:
             with contextlib.suppress(Exception):
-                self._current_layer.actions().doActionFeature(act_data["id"], feat)
+                layer.actions().doActionFeature(act_data["id"], feat)
             if hasattr(self.iface, "messageBar") and self.iface.messageBar():
                 self.iface.messageBar().pushSuccess(
                     "Qgis MapTips", f"Executed '{act_data['name']}' on feature ID {feat.id()}."
@@ -1757,13 +1864,14 @@ class QgisMapTipsDock(QDockWidget):
             )
 
     def _on_clear_layer_actions(self) -> None:
-        if not isinstance(self._current_layer, QgsVectorLayer):
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer):
             return
-        count = remove_all_actions(self._current_layer)
+        count = remove_all_actions(layer)
         self._refresh_active_actions_list()
         if hasattr(self.iface, "messageBar"):
             self.iface.messageBar().pushInfo(
-                "Qgis MapTips", f"Removed {count} actions from '{self._current_layer.name()}'."
+                "Qgis MapTips", f"Removed {count} actions from '{layer.name()}'."
             )
 
     def _toggle_canvas_cadastre_tool(self) -> None:
@@ -1812,8 +1920,8 @@ class QgisMapTipsDock(QDockWidget):
             QDesktopServices.openUrl(url)
 
     def _copy_attributes_of_sample_feature(self) -> None:
+        layer = self._resolve_target_layer()
         feat = getattr(self, "_current_sample_feat", None)
-        layer = self._current_layer
         if not feat and isinstance(layer, QgsVectorLayer):
             sel = layer.selectedFeatures()
             feat = sel[0] if sel else None
@@ -1835,8 +1943,8 @@ class QgisMapTipsDock(QDockWidget):
 
     def _export_sample_card_report(self) -> None:
         import os, tempfile
+        layer = self._resolve_target_layer()
         feat = getattr(self, "_current_sample_feat", None)
-        layer = self._current_layer
         if not feat and isinstance(layer, QgsVectorLayer):
             sel = layer.selectedFeatures()
             feat = sel[0] if sel else None
@@ -1868,8 +1976,9 @@ class QgisMapTipsDock(QDockWidget):
                 self.iface.messageBar().pushSuccess("Qgis MapTips", "Opened standalone HTML report in browser.")
 
     def _run_sample_instant_tkgm(self) -> None:
+        layer = self._resolve_target_layer()
         feat = getattr(self, "_current_sample_feat", None)
-        if not feat or not feat.hasGeometry() or not isinstance(self._current_layer, QgsVectorLayer):
+        if not feat or not feat.hasGeometry() or not isinstance(layer, QgsVectorLayer):
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushWarning("TKGM Cadastre", "No sample feature with valid geometry found in selected layer.")
             return
@@ -1885,7 +1994,7 @@ class QgisMapTipsDock(QDockWidget):
         try:
             pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid()
             pt = pos.asPoint()
-            tr = QgsCoordinateTransform(self._current_layer.crs(), QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
+            tr = QgsCoordinateTransform(layer.crs(), QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
             wgs = tr.transform(pt)
             lat, lon = round(wgs.y(), 6), round(wgs.x(), 6)
 
