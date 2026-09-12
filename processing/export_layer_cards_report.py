@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import html
-import os
 from typing import Any, Dict
 
 from qgis.core import (
@@ -16,7 +15,6 @@ from qgis.core import (
     QgsProcessingParameterFileDestination,
     QgsProcessingParameterNumber,
     QgsProcessingParameterVectorLayer,
-    QgsVectorLayer,
 )
 
 from ..core.template_engine import Archetype, TemplateConfig, compile_maptip_html

@@ -28,8 +28,6 @@ from qgis_maptips.core.action_builder import (
     build_custom_url_action,
     build_open_file_action,
     build_select_intersecting_action,
-    get_layer_actions,
-    remove_all_actions,
 )
 from qgis_maptips.core.cadastre_tool import (
     CADASTRE_LAYER_NAME,

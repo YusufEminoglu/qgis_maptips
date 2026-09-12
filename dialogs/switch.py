@@ -13,9 +13,8 @@ from qgis.PyQt.QtCore import (
     QRectF,
     Qt,
     pyqtProperty,
-    pyqtSignal,
 )
-from qgis.PyQt.QtGui import QBrush, QColor, QFont, QPainter, QPen
+from qgis.PyQt.QtGui import QBrush, QColor, QPainter, QPen
 from qgis.PyQt.QtWidgets import QAbstractButton, QWidget
 
 

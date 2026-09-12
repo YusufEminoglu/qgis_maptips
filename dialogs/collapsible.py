@@ -10,8 +10,6 @@ from typing import Optional
 from qgis.PyQt.QtCore import Qt
 from qgis.PyQt.QtWidgets import (
     QFrame,
-    QHBoxLayout,
-    QLabel,
     QPushButton,
     QVBoxLayout,
     QWidget,

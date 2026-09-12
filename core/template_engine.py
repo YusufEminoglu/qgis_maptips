@@ -11,7 +11,7 @@ import json
 from dataclasses import asdict, dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any
 
 from .chart_engine import (
     build_progress_bar_table,

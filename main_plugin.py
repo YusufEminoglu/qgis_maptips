@@ -260,10 +260,7 @@ class QgisMapTipsPlugin:
         from .dialogs.quick_manual import QuickManualDialog
 
         dlg = QuickManualDialog(self.iface.mainWindow() if self.iface else None)
-        if hasattr(dlg, "exec_"):
-            dlg.exec_()
-        else:
-            dlg.exec()
+        dlg.exec()
 
     def _rate_plugin(self) -> None:
         import webbrowser

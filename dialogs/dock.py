@@ -2,8 +2,6 @@
 from __future__ import annotations
 
 import contextlib
-import html
-import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -18,7 +16,6 @@ from qgis.PyQt.QtWidgets import (
     QFileDialog,
     QFormLayout,
     QFrame,
-    QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -48,9 +45,7 @@ from qgis.core import (
     QgsExpressionContextUtils,
     QgsFeature,
     QgsFeatureRequest,
-    QgsGeometry,
     QgsMapLayer,
-    QgsPointXY,
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
@@ -75,7 +70,9 @@ from ..core.template_engine import (
 from ..core.cadastre_tool import (
     add_parcel_feature,
     get_or_create_cadastre_layer,
+    is_in_turkey_bounds,
     parse_tkgm_response,
+    query_tkgm_megsis,
 )
 from .collapsible import CollapsibleSection
 from .switch import IOSToggleSwitch
@@ -1175,10 +1172,7 @@ class QgisMapTipsDock(QDockWidget):
         if is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
             with contextlib.suppress(Exception):
                 req = QgsFeatureRequest()
-                if hasattr(QgsFeatureRequest, "Flag") and hasattr(QgsFeatureRequest.Flag, "NoGeometry"):
-                    req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
-                elif hasattr(QgsFeatureRequest, "NoGeometry"):
-                    req.setFlags(QgsFeatureRequest.NoGeometry)
+                req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
                 req.setLimit(50)
                 for feat in self._current_layer.getFeatures(req):
                     self._sample_features.append(feat)
@@ -1600,10 +1594,7 @@ class QgisMapTipsDock(QDockWidget):
             else:
                 with contextlib.suppress(Exception):
                     req = QgsFeatureRequest()
-                    if hasattr(QgsFeatureRequest, "Flag") and hasattr(QgsFeatureRequest.Flag, "NoGeometry"):
-                        req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
-                    elif hasattr(QgsFeatureRequest, "NoGeometry"):
-                        req.setFlags(QgsFeatureRequest.NoGeometry)
+                    req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
                     req.setLimit(1)
                     for feat in layer.getFeatures(req):
                         sample_feature = feat
@@ -2071,14 +2062,6 @@ class QgisMapTipsDock(QDockWidget):
                 self.iface.messageBar().pushWarning("TKGM Cadastre", "No sample feature with valid geometry found in selected layer.")
             return
 
-        from ..core.cadastre_tool import (
-            add_parcel_feature,
-            get_or_create_cadastre_layer,
-            is_in_turkey_bounds,
-            parse_tkgm_response,
-            query_tkgm_megsis,
-        )
-
         try:
             pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid()
             pt = pos.asPoint()
@@ -2359,10 +2342,7 @@ class QgisMapTipsDock(QDockWidget):
         from .quick_manual import QuickManualDialog
 
         dlg = QuickManualDialog(self)
-        if hasattr(dlg, "exec_"):
-            dlg.exec_()
-        else:
-            dlg.exec()
+        dlg.exec()
 
     def _open_rate_plugin(self) -> None:
         import webbrowser

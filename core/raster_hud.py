@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import html
-from typing import TYPE_CHECKING, Any, Optional
+from typing import TYPE_CHECKING, Optional
 
 from qgis.PyQt.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
@@ -27,7 +27,6 @@ from qgis.core import (
     QgsFeature,
     QgsFeatureRequest,
     QgsGeometry,
-    QgsPointXY,
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,

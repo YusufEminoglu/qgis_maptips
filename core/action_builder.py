@@ -567,7 +567,6 @@ try:
         QgsExpressionContext,
         QgsExpressionContextUtils,
         QgsProject,
-        QgsVectorLayer,
     )
 except ImportError:
     class QObject:  # type: ignore
