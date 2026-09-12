@@ -98,6 +98,19 @@ PALETTES = {
         "text_secondary": "#64748b",
         "border": "#ddd6fe",
     },
+    "amber": {
+        "name": "Cadastral Amber",
+        "header_bg": "#d97706",
+        "header_text": "#ffffff",
+        "sub_bg": "#b45309",
+        "sub_text": "#fef3c7",
+        "accent": "#f59e0b",
+        "card_bg": "#ffffff",
+        "row_alt": "#fffbeb",
+        "text_primary": "#78350f",
+        "text_secondary": "#92400e",
+        "border": "#fde68a",
+    },
 }
 
 

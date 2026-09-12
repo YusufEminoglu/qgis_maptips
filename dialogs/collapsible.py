@@ -43,36 +43,12 @@ class CollapsibleSection(QWidget):
         btn_cursor = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
         if btn_cursor is not None:
             self.toggle_btn.setCursor(btn_cursor)
-        self.toggle_btn.setStyleSheet(
-            "QPushButton#collapsibleHeader {"
-            "  text-align: left;"
-            "  font-weight: 600;"
-            "  font-size: 9pt;"
-            "  padding: 6px 8px;"
-            "  background: transparent;"
-            "  border: 1px solid #cbd5e1;"
-            "  border-radius: 6px;"
-            "  color: #334155;"
-            "}"
-            "QPushButton#collapsibleHeader:hover {"
-            "  background: #f1f5f9;"
-            "  border-color: #94a3b8;"
-            "}"
-        )
         self.toggle_btn.clicked.connect(self._on_toggled)
         main_layout.addWidget(self.toggle_btn)
 
         # Content Container
         self.content_area = QFrame()
         self.content_area.setObjectName("collapsibleContent")
-        self.content_area.setStyleSheet(
-            "QFrame#collapsibleContent {"
-            "  border-left: 2px solid #0284c7;"
-            "  margin-left: 6px;"
-            "  padding-left: 8px;"
-            "  background: transparent;"
-            "}"
-        )
         self.content_layout = QVBoxLayout(self.content_area)
         self.content_layout.setContentsMargins(4, 4, 4, 4)
         self.content_layout.setSpacing(6)

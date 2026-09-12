@@ -87,40 +87,123 @@ QWidget#maptipsRoot {{
     background-color: {t['surface']};
     color: {t['text']};
 }}
+QScrollArea {{
+    border: none;
+    background-color: transparent;
+}}
+QScrollBar:vertical {{
+    border: none;
+    background: transparent;
+    width: 6px;
+    margin: 0px 0px 0px 0px;
+}}
+QScrollBar::handle:vertical {{
+    background: {t['border']};
+    min-height: 24px;
+    border-radius: 3px;
+}}
+QScrollBar::handle:vertical:hover {{
+    background: {t['accent']};
+}}
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{
+    height: 0px;
+}}
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical {{
+    background: none;
+}}
+QScrollBar:horizontal {{
+    border: none;
+    background: transparent;
+    height: 6px;
+    margin: 0px 0px 0px 0px;
+}}
+QScrollBar::handle:horizontal {{
+    background: {t['border']};
+    min-width: 24px;
+    border-radius: 3px;
+}}
+QScrollBar::handle:horizontal:hover {{
+    background: {t['accent']};
+}}
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {{
+    width: 0px;
+}}
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal {{
+    background: none;
+}}
+
+/* Form inputs */
+QLineEdit, QSpinBox, QComboBox {{
+    background-color: {t['input_surface']};
+    color: {t['input_text']};
+    border: 1px solid {t['border']};
+    border-radius: 4px;
+    padding: 2px 6px;
+    min-height: 22px;
+    font-size: 8.5pt;
+}}
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
+    border-color: {t['accent']};
+}}
+QComboBox::drop-down {{
+    subcontrol-origin: padding;
+    subcontrol-position: top right;
+    width: 18px;
+    border-left: 1px solid {t['border']};
+}}
+
+/* Hero Panel */
 QFrame#heroPanel {{
     background-color: {t['hero']};
     border: 1px solid {t['border']};
-    border-radius: 8px;
-    padding: 8px;
+    border-radius: 6px;
+    padding: 6px 8px;
+}}
+QLabel#heroMark {{
+    background-color: {t['accent']};
+    color: #ffffff;
+    font-weight: 800;
+    font-size: 10pt;
+    border-radius: 5px;
 }}
 QLabel#heroTitle {{
-    font-size: 13pt;
+    font-size: 11pt;
     font-weight: bold;
     color: {t['text']};
+}}
+QLabel#heroEyebrow {{
+    color: {t['accent']};
+    font-size: 7.5pt;
+    font-weight: 700;
+    letter-spacing: 0.5px;
 }}
 QLabel#heroBadge {{
     color: {t['accent']};
     background-color: {t['status']};
     border: 1px solid {t['accent']};
-    border-radius: 6px;
-    padding: 2px 6px;
-    font-size: 8pt;
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 7.5pt;
     font-weight: 600;
 }}
+
+/* Tab Widget */
 QTabWidget::pane {{
     border: 1px solid {t['border']};
     background-color: {t['surface']};
     border-radius: 6px;
+    top: -1px;
 }}
 QTabBar::tab {{
     background-color: {t['card']};
     color: {t['text']};
-    padding: 6px 12px;
+    padding: 4px 10px;
     margin-right: 2px;
     border: 1px solid {t['border']};
     border-bottom: none;
-    border-top-left-radius: 5px;
-    border-top-right-radius: 5px;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    font-size: 8.5pt;
 }}
 QTabBar::tab:selected {{
     background-color: {t['tab_active']};
@@ -128,13 +211,16 @@ QTabBar::tab:selected {{
     font-weight: bold;
     border-color: {t['accent']};
 }}
+
+/* Group Boxes & Sections */
 QGroupBox {{
     font-weight: bold;
     border: 1px solid {t['border']};
     border-radius: 6px;
-    margin-top: 8px;
-    padding-top: 10px;
+    margin-top: 6px;
+    padding-top: 8px;
     background-color: {t['card']};
+    font-size: 8.5pt;
 }}
 QGroupBox::title {{
     subcontrol-origin: margin;
@@ -142,13 +228,15 @@ QGroupBox::title {{
     padding: 0 4px;
     color: {t['text']};
 }}
+
+/* Buttons */
 QPushButton#primaryAction {{
     background-color: {t['accent']};
     color: {t['accent_text']};
     border: 1px solid {t['accent']};
-    border-radius: 6px;
-    padding: 8px 16px;
-    font-size: 9pt;
+    border-radius: 5px;
+    padding: 6px 14px;
+    font-size: 8.5pt;
     font-weight: bold;
 }}
 QPushButton#primaryAction:hover {{
@@ -158,8 +246,9 @@ QPushButton#secondaryAction {{
     background-color: {t['card']};
     color: {t['text']};
     border: 1px solid {t['border']};
-    border-radius: 6px;
-    padding: 6px 12px;
+    border-radius: 5px;
+    padding: 5px 10px;
+    font-size: 8.5pt;
 }}
 QPushButton#secondaryAction:hover {{
     border-color: {t['accent']};
@@ -174,9 +263,9 @@ QPushButton#presetChip {{
     background-color: {t['card']};
     color: {t['text']};
     border: 1px solid {t['border']};
-    border-radius: 12px;
-    padding: 3px 10px;
-    font-size: 8pt;
+    border-radius: 10px;
+    padding: 2px 8px;
+    font-size: 7.5pt;
     font-weight: 600;
 }}
 QPushButton#presetChip:hover {{
@@ -184,26 +273,20 @@ QPushButton#presetChip:hover {{
     color: {t['accent']};
     background-color: {t['hero']};
 }}
-QLabel#heroEyebrow {{
-    color: {t['accent']};
-    font-size: 8pt;
-    font-weight: 700;
-    letter-spacing: 0.5px;
-}}
 QLabel#layerBadge {{
     color: {t['text']};
     background-color: {t['card']};
     border: 1px solid {t['border']};
-    border-radius: 4px;
-    padding: 3px 6px;
-    font-size: 8pt;
+    border-radius: 3px;
+    padding: 2px 5px;
+    font-size: 7.5pt;
 }}
 QPushButton#quietButton {{
     background-color: {t['card']};
     color: {t['text']};
     border: 1px solid {t['border']};
     border-radius: 4px;
-    padding: 3px 8px;
+    padding: 2px 6px;
     font-size: 8pt;
     font-weight: 600;
 }}
@@ -216,8 +299,8 @@ QPushButton#collapsibleHeader {{
     background-color: {t['card']};
     color: {t['text']};
     border: 1px solid {t['border']};
-    border-radius: 6px;
-    padding: 6px 10px;
+    border-radius: 5px;
+    padding: 5px 8px;
     font-size: 8.5pt;
     font-weight: 600;
     text-align: left;
@@ -231,6 +314,22 @@ QFrame#collapsibleContent {{
     margin-left: 4px;
     padding-left: 6px;
     background-color: transparent;
+}}
+QListWidget {{
+    background-color: {t['input_surface']};
+    color: {t['input_text']};
+    border: 1px solid {t['border']};
+    border-radius: 4px;
+    padding: 2px;
+}}
+QListWidget::item {{
+    padding: 3px 6px;
+    border-bottom: 1px solid {t['border']};
+}}
+QListWidget::item:selected {{
+    background-color: {t['selection']};
+    color: #ffffff;
+    border-radius: 3px;
 }}
 """
 

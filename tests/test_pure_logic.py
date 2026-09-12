@@ -243,7 +243,7 @@ class TestActionBuilder(unittest.TestCase):
         self.assertIn("(Turkey Only)", act["name"])
         self.assertIn("cbsapi.tkgm.gov.tr/megsiswebapi", act["command"])
         self.assertIn("QgsNetworkAccessManager", act["command"])
-        self.assertIn("TKGM Cadastre Parcels (TR)", act["command"])
+        self.assertIn("TKGM Parselleri (TR)", act["command"])
 
         # Card buttons ribbon row
         row_html_tkgm = build_card_action_buttons_row(["tkgm_cadastre"], {

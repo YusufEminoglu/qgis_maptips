@@ -62,6 +62,11 @@ from ..core.template_engine import (
     TemplateConfig,
     compile_maptip_html,
 )
+from ..core.cadastre_tool import (
+    add_parcel_feature,
+    get_or_create_cadastre_layer,
+    parse_tkgm_response,
+)
 from .collapsible import CollapsibleSection
 from .switch import IOSToggleSwitch
 from .theme import apply_adaptive_theme
@@ -110,33 +115,43 @@ class QgisMapTipsDock(QDockWidget):
         root = QWidget()
         root.setObjectName("maptipsRoot")
         main_layout = QVBoxLayout(root)
-        main_layout.setContentsMargins(8, 8, 8, 8)
-        main_layout.setSpacing(6)
+        main_layout.setContentsMargins(6, 6, 6, 6)
+        main_layout.setSpacing(5)
 
-        # 1. Hero Header Panel
+        # 1. Compact Sleek Hero Panel
         hero = QFrame()
         hero.setObjectName("heroPanel")
         hero_layout = QVBoxLayout(hero)
-        hero_layout.setContentsMargins(8, 8, 8, 8)
-        hero_layout.setSpacing(5)
-
-        eyebrow_row = QHBoxLayout()
-        eyebrow = QLabel("HTML MAPTIPS & ACTIONS STUDIO")
-        eyebrow.setObjectName("heroEyebrow")
-        eyebrow_row.addWidget(eyebrow)
-        eyebrow_row.addStretch()
-        hero_layout.addLayout(eyebrow_row)
+        hero_layout.setContentsMargins(8, 6, 8, 6)
+        hero_layout.setSpacing(4)
 
         top_row = QHBoxLayout()
+        top_row.setSpacing(6)
+
+        hero_mark = QLabel("MT")
+        hero_mark.setObjectName("heroMark")
+        align_center = getattr(getattr(Qt, "AlignmentFlag", Qt), "AlignCenter", 0)
+        hero_mark.setAlignment(align_center)
+        hero_mark.setFixedSize(26, 26)
+        top_row.addWidget(hero_mark)
+
+        title_box = QVBoxLayout()
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_box.setSpacing(0)
+        eyebrow = QLabel("ADVANCED MAP TIPS & ACTIONS")
+        eyebrow.setObjectName("heroEyebrow")
         title = QLabel("MapTips Studio")
         title.setObjectName("heroTitle")
+        title_box.addWidget(eyebrow)
+        title_box.addWidget(title)
+        top_row.addLayout(title_box, 1)
 
-        # Animated iOS Toggle Switch for MapTips
+        # Compact animated iOS Toggle Switch for MapTips
         switch_box = QHBoxLayout()
-        switch_box.setSpacing(6)
+        switch_box.setSpacing(4)
         self.maptips_switch_lbl = QLabel("MapTips")
-        self.maptips_switch_lbl.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #475569;")
-        self.maptips_switch = IOSToggleSwitch(default_on=True)
+        self.maptips_switch_lbl.setStyleSheet("font-size: 8pt; font-weight: bold; color: #475569;")
+        self.maptips_switch = IOSToggleSwitch(default_on=True, width=46, height=22)
         self.maptips_switch.setToolTip("Toggle QGIS Canvas MapTips visibility (Green: ON / Red: OFF)")
         self.maptips_switch.toggled.connect(self._on_maptips_switch_toggled)
         switch_box.addWidget(self.maptips_switch_lbl)
@@ -144,36 +159,40 @@ class QgisMapTipsDock(QDockWidget):
 
         badge = QLabel("PRO")
         badge.setObjectName("heroBadge")
-        top_row.addWidget(title)
-        top_row.addStretch()
         top_row.addLayout(switch_box)
         top_row.addWidget(badge)
         hero_layout.addLayout(top_row)
 
+        # Single compact row for target layer + refresh + status pill
         layer_row = QHBoxLayout()
-        layer_lbl = QLabel("Target Layer:")
-        layer_lbl.setStyleSheet("font-weight: bold; font-size: 9pt;")
+        layer_row.setSpacing(5)
+        layer_lbl = QLabel("Layer:")
+        layer_lbl.setStyleSheet("font-weight: bold; font-size: 8.5pt;")
         self.layer_combo = QComboBox()
         self.layer_combo.currentIndexChanged.connect(self._on_target_layer_selected)
+
         self.refresh_btn = QPushButton("↻")
         self.refresh_btn.setObjectName("quietButton")
         self.refresh_btn.setToolTip("Refresh layer list")
-        self.refresh_btn.setFixedWidth(28)
+        self.refresh_btn.setFixedWidth(24)
+        self.refresh_btn.setFixedHeight(22)
         self.refresh_btn.clicked.connect(self._refresh_layers)
+
+        self.layer_info_label = QLabel("None")
+        self.layer_info_label.setObjectName("layerBadge")
+        self.layer_info_label.setMaximumWidth(120)
 
         layer_row.addWidget(layer_lbl)
         layer_row.addWidget(self.layer_combo, 1)
         layer_row.addWidget(self.refresh_btn)
+        layer_row.addWidget(self.layer_info_label)
         hero_layout.addLayout(layer_row)
-
-        self.layer_info_label = QLabel("Select a layer to start")
-        self.layer_info_label.setObjectName("layerBadge")
-        hero_layout.addWidget(self.layer_info_label)
 
         main_layout.addWidget(hero)
 
         # 2. Main Tabbed Workspace
         self.tabs = QTabWidget()
+        self.tabs.setDocumentMode(True)
 
         # Tab 1: MapTip Designer
         tab_designer = QWidget()
@@ -196,29 +215,33 @@ class QgisMapTipsDock(QDockWidget):
         self.setWidget(root)
 
     def _build_designer_tab(self, parent: QWidget) -> None:
-        layout = QVBoxLayout(parent)
-        layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(6)
+        outer_layout = QVBoxLayout(parent)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         scroll_widget = QWidget()
         scroll_layout = QVBoxLayout(scroll_widget)
-        scroll_layout.setContentsMargins(4, 4, 4, 4)
-        scroll_layout.setSpacing(6)
+        scroll_layout.setContentsMargins(6, 6, 6, 6)
+        scroll_layout.setSpacing(5)
 
         # 1. Quick Presets Chips Bar
         chips_box = QHBoxLayout()
         chips_box.setSpacing(4)
-        chips_lbl = QLabel("Quick Presets:")
-        chips_lbl.setStyleSheet("font-size: 8pt; font-weight: bold; color: #64748b;")
+        chips_lbl = QLabel("Presets:")
+        chips_lbl.setStyleSheet("font-size: 7.5pt; font-weight: bold; color: #64748b;")
         chips_box.addWidget(chips_lbl)
 
         presets_quick = [
-            ("🏢 Real Estate", "kpi_real_estate.json"),
-            ("⚡ Capacity", "progress_capacity.json"),
+            ("🏢 KPI", "kpi_real_estate.json"),
+            ("⚡ Bar", "progress_capacity.json"),
             ("🍩 Donut", "donut_shares.json"),
-            ("📈 Sparkline", "sparkline_timeline.json"),
+            ("📈 Trend", "sparkline_timeline.json"),
         ]
         for title, pfile in presets_quick:
             chip = QPushButton(title)
@@ -234,8 +257,9 @@ class QgisMapTipsDock(QDockWidget):
 
         # 2. Preset Toolbar
         preset_box = QHBoxLayout()
-        preset_lbl = QLabel("Template Preset:")
-        preset_lbl.setStyleSheet("font-size:8.5pt; font-weight:bold;")
+        preset_box.setSpacing(4)
+        preset_lbl = QLabel("Template:")
+        preset_lbl.setStyleSheet("font-size:8pt; font-weight:bold;")
         self.preset_combo = QComboBox()
         self.preset_combo.addItem("(Current / Custom)")
         self.preset_combo.addItem("Real Estate Investment", "kpi_real_estate.json")
@@ -245,9 +269,11 @@ class QgisMapTipsDock(QDockWidget):
         self.preset_combo.currentIndexChanged.connect(self._on_preset_selected)
 
         self.btn_save_preset = QPushButton("Save...")
+        self.btn_save_preset.setObjectName("quietButton")
         self.btn_save_preset.setToolTip("Save current card configuration as JSON preset")
         self.btn_save_preset.clicked.connect(self._save_preset)
         self.btn_load_preset = QPushButton("Load...")
+        self.btn_load_preset.setObjectName("quietButton")
         self.btn_load_preset.setToolTip("Load custom preset from JSON file")
         self.btn_load_preset.clicked.connect(self._load_preset)
 
@@ -257,9 +283,11 @@ class QgisMapTipsDock(QDockWidget):
         preset_box.addWidget(self.btn_load_preset)
         scroll_layout.addLayout(preset_box)
 
-        # 3. Core Style & Layout Model
-        grp_style = QGroupBox("Layout & Color Palette")
-        form_style = QFormLayout(grp_style)
+        # 3. Collapsible: Layout Model & Color Palette
+        self.section_style = CollapsibleSection("🎨 Layout & Color Theme", initially_expanded=True)
+        form_style = QFormLayout()
+        form_style.setContentsMargins(4, 4, 4, 4)
+        form_style.setSpacing(4)
 
         self.archetype_combo = QComboBox()
         self.archetype_combo.addItem("Modern KPI Card", Archetype.KPI_CARD)
@@ -269,13 +297,13 @@ class QgisMapTipsDock(QDockWidget):
         self.archetype_combo.addItem("Media / Photo Card", Archetype.MEDIA_CARD)
         self.archetype_combo.addItem("Clean Attribute Grid", Archetype.CLEAN_TABLE)
         self.archetype_combo.currentIndexChanged.connect(self._on_archetype_changed)
-        form_style.addRow("Layout Model:", self.archetype_combo)
+        form_style.addRow("Layout:", self.archetype_combo)
 
         self.palette_combo = QComboBox()
         for key, pinfo in PALETTES.items():
             self.palette_combo.addItem(pinfo["name"], key)
         self.palette_combo.currentIndexChanged.connect(self._update_preview)
-        form_style.addRow("Color Theme:", self.palette_combo)
+        form_style.addRow("Palette:", self.palette_combo)
 
         self.card_width_spin = QSpinBox()
         self.card_width_spin.setRange(180, 800)
@@ -283,30 +311,33 @@ class QgisMapTipsDock(QDockWidget):
         self.card_width_spin.setValue(320)
         self.card_width_spin.setSuffix(" px")
         self.card_width_spin.valueChanged.connect(self._update_preview)
-        form_style.addRow("Card Width:", self.card_width_spin)
+        form_style.addRow("Width:", self.card_width_spin)
 
         self.cb_card_actions = QCheckBox("Show 1-Click Action Buttons Ribbon")
         self.cb_card_actions.setChecked(True)
         self.cb_card_actions.toggled.connect(self._update_preview)
-        form_style.addRow("Card Actions:", self.cb_card_actions)
+        form_style.addRow("", self.cb_card_actions)
 
-        scroll_layout.addWidget(grp_style)
+        self.section_style.add_layout(form_style)
+        scroll_layout.addWidget(self.section_style)
 
-        # 4. Core Field Mapping Group
-        grp_fields = QGroupBox("Core Field Mappings")
-        form_fields = QFormLayout(grp_fields)
+        # 4. Collapsible: Core Field Mappings
+        self.section_fields = CollapsibleSection("🏷️ Core Field Mappings", initially_expanded=True)
+        form_fields = QFormLayout()
+        form_fields.setContentsMargins(4, 4, 4, 4)
+        form_fields.setSpacing(4)
 
         self.title_field_combo = QComboBox()
         self.title_field_combo.currentIndexChanged.connect(self._update_preview)
-        form_fields.addRow("Title Field:", self.title_field_combo)
+        form_fields.addRow("Title:", self.title_field_combo)
 
         self.sub_field_combo = QComboBox()
         self.sub_field_combo.currentIndexChanged.connect(self._update_preview)
-        form_fields.addRow("Subtitle Field:", self.sub_field_combo)
+        form_fields.addRow("Subtitle:", self.sub_field_combo)
 
         self.kpi_field_combo = QComboBox()
         self.kpi_field_combo.currentIndexChanged.connect(self._update_preview)
-        form_fields.addRow("Main KPI Field:", self.kpi_field_combo)
+        form_fields.addRow("Main KPI:", self.kpi_field_combo)
 
         self.kpi_label_edit = QLineEdit()
         self.kpi_label_edit.setPlaceholderText("e.g. Total Score / Capacity")
@@ -318,61 +349,52 @@ class QgisMapTipsDock(QDockWidget):
         self.kpi_unit_edit.textChanged.connect(self._update_preview)
         form_fields.addRow("KPI Unit:", self.kpi_unit_edit)
 
-        scroll_layout.addWidget(grp_fields)
+        self.section_fields.add_layout(form_fields)
+        scroll_layout.addWidget(self.section_fields)
 
-        # 5. Progressive Disclosure: Collapsible Advanced Options
-        self.adv_section = CollapsibleSection("⚙️ Advanced Metrics & Layout Options", initially_expanded=False)
-
-        # Card Dimensions & Media Group
-        grp_adv_layout = QGroupBox("Card Dimensions & Media")
-        form_adv_layout = QFormLayout(grp_adv_layout)
+        # 5. Collapsible: Advanced Options (Media, Formatting, Rules)
+        self.adv_section = CollapsibleSection("⚙️ Advanced Options (Media, Rules, Metrics)", initially_expanded=False)
+        form_adv = QFormLayout()
+        form_adv.setContentsMargins(4, 4, 4, 4)
+        form_adv.setSpacing(4)
 
         self.media_field_combo = QComboBox()
         self.media_field_combo.currentIndexChanged.connect(self._update_preview)
-        form_adv_layout.addRow("Media/Photo Field:", self.media_field_combo)
+        form_adv.addRow("Photo Field:", self.media_field_combo)
 
         self.combo_media_fallback = QComboBox()
-        self.combo_media_fallback.addItem("Show Modern SVG Placeholder", "placeholder")
+        self.combo_media_fallback.addItem("Show SVG Placeholder", "placeholder")
         self.combo_media_fallback.addItem("Collapse & Hide Row", "hide")
         self.combo_media_fallback.currentIndexChanged.connect(self._update_preview)
-        form_adv_layout.addRow("Missing Photo Fallback:", self.combo_media_fallback)
+        form_adv.addRow("Missing Photo:", self.combo_media_fallback)
 
-        self.adv_section.add_widget(grp_adv_layout)
-
-        # Resilient Data Formatting Group
-        grp_formatting = QGroupBox("Smart Formatting & Missing Values")
-        form_fmt = QFormLayout(grp_formatting)
-
-        self.cb_format_numbers = QCheckBox("Format Numbers with Separators (e.g. 1,250)")
+        self.cb_format_numbers = QCheckBox("Format Numbers (e.g. 1,250)")
         self.cb_format_numbers.setChecked(True)
         self.cb_format_numbers.toggled.connect(self._update_preview)
-        form_fmt.addRow("", self.cb_format_numbers)
+        form_adv.addRow("", self.cb_format_numbers)
 
         self.spin_decimals = QSpinBox()
         self.spin_decimals.setRange(0, 6)
         self.spin_decimals.setValue(2)
-        self.spin_decimals.setSuffix(" decimals")
+        self.spin_decimals.setSuffix(" dec.")
         self.spin_decimals.valueChanged.connect(self._update_preview)
-        form_fmt.addRow("Float Decimals:", self.spin_decimals)
+        form_adv.addRow("Decimals:", self.spin_decimals)
 
         self.edit_null_text = QLineEdit("—")
         self.edit_null_text.textChanged.connect(self._update_preview)
-        form_fmt.addRow("Missing/Null Fallback:", self.edit_null_text)
+        form_adv.addRow("Null Text:", self.edit_null_text)
 
-        self.adv_section.add_widget(grp_formatting)
-
-        # Conditional Formatting Group (Traffic-Light Badges)
-        grp_cond = QGroupBox("Conditional Status Badge (Traffic Light)")
-        form_cond = QFormLayout(grp_cond)
+        # Conditional Badge
         self.cb_cond_enable = QCheckBox("Enable Status Badge")
         self.cb_cond_enable.toggled.connect(self._update_preview)
-        form_cond.addRow("", self.cb_cond_enable)
+        form_adv.addRow("Status Badge:", self.cb_cond_enable)
 
         self.cond_field_combo = QComboBox()
         self.cond_field_combo.currentIndexChanged.connect(self._update_preview)
-        form_cond.addRow("Rule Field:", self.cond_field_combo)
+        form_adv.addRow("Rule Field:", self.cond_field_combo)
 
         cond_row = QHBoxLayout()
+        cond_row.setSpacing(4)
         self.cond_op_combo = QComboBox()
         self.cond_op_combo.addItems([">=", ">", "<=", "<", "=="])
         self.cond_op_combo.currentIndexChanged.connect(self._update_preview)
@@ -380,79 +402,76 @@ class QgisMapTipsDock(QDockWidget):
         self.cond_val_edit.textChanged.connect(self._update_preview)
         cond_row.addWidget(self.cond_op_combo)
         cond_row.addWidget(self.cond_val_edit)
-        form_cond.addRow("Condition:", cond_row)
+        form_adv.addRow("Threshold:", cond_row)
 
         lbl_row = QHBoxLayout()
-        self.cond_lbl_true = QLineEdit("High / Pass")
+        lbl_row.setSpacing(4)
+        self.cond_lbl_true = QLineEdit("Pass")
         self.cond_lbl_true.textChanged.connect(self._update_preview)
-        self.cond_lbl_false = QLineEdit("Low / Attention")
+        self.cond_lbl_false = QLineEdit("Alert")
         self.cond_lbl_false.textChanged.connect(self._update_preview)
         lbl_row.addWidget(self.cond_lbl_true)
         lbl_row.addWidget(self.cond_lbl_false)
-        form_cond.addRow("Labels (True / False):", lbl_row)
+        form_adv.addRow("Labels (T / F):", lbl_row)
 
-        self.adv_section.add_widget(grp_cond)
-
-        # Relational / Cross-Layer Spatial Metrics
-        grp_rel = QGroupBox("Cross-Layer Relational Metric")
-        form_rel = QFormLayout(grp_rel)
-        self.cb_rel_enable = QCheckBox("Add Spatial/Relational Metric")
+        # Relational Metric
+        self.cb_rel_enable = QCheckBox("Add Relational Metric")
         self.cb_rel_enable.toggled.connect(self._update_preview)
-        form_rel.addRow("", self.cb_rel_enable)
+        form_adv.addRow("Cross-Layer:", self.cb_rel_enable)
 
         self.rel_layer_combo = QComboBox()
         self.rel_layer_combo.currentIndexChanged.connect(self._update_preview)
-        form_rel.addRow("Related Layer:", self.rel_layer_combo)
+        form_adv.addRow("Target Layer:", self.rel_layer_combo)
 
         self.rel_op_combo = QComboBox()
         self.rel_op_combo.addItem("Spatial Intersects (Count)", ("intersects", "count"))
         self.rel_op_combo.addItem("Spatial Contains (Count)", ("contains", "count"))
-        self.rel_op_combo.addItem("Nearest Neighbor (Name/ID)", ("nearest", "first"))
+        self.rel_op_combo.addItem("Nearest Neighbor (ID)", ("nearest", "first"))
         self.rel_op_combo.currentIndexChanged.connect(self._update_preview)
-        form_rel.addRow("Relationship:", self.rel_op_combo)
+        form_adv.addRow("Operation:", self.rel_op_combo)
 
         self.rel_label_edit = QLineEdit("Connected Objects")
         self.rel_label_edit.textChanged.connect(self._update_preview)
-        form_rel.addRow("Metric Label:", self.rel_label_edit)
+        form_adv.addRow("Metric Label:", self.rel_label_edit)
 
-        self.adv_section.add_widget(grp_rel)
-
-        # Attribute Checklist
-        grp_attrs = QGroupBox("Detail Attributes (Checked to include)")
-        attr_layout = QVBoxLayout(grp_attrs)
+        # Attributes list
+        attr_box = QVBoxLayout()
+        attr_lbl = QLabel("Detail Attributes (Checked to include):")
+        attr_lbl.setStyleSheet("font-size: 8pt; font-weight: bold; color: #475569;")
         self.attrs_list = QListWidget()
-        self.attrs_list.setMaximumHeight(130)
+        self.attrs_list.setMaximumHeight(95)
         self.attrs_list.itemChanged.connect(self._update_preview)
-        attr_layout.addWidget(self.attrs_list)
-        self.adv_section.add_widget(grp_attrs)
+        attr_box.addWidget(attr_lbl)
+        attr_box.addWidget(self.attrs_list)
 
+        self.adv_section.add_layout(form_adv)
+        self.adv_section.add_layout(attr_box)
         scroll_layout.addWidget(self.adv_section)
 
-        # Live Preview Group
-        grp_preview = QGroupBox("Live Preview & Expression Code")
-        prev_layout = QVBoxLayout(grp_preview)
+        # 6. Collapsible: Live Preview & Expression
+        self.section_preview = CollapsibleSection("👁️ Live Preview & Expression", initially_expanded=True)
+        prev_layout = QVBoxLayout()
+        prev_layout.setContentsMargins(4, 4, 4, 4)
+        prev_layout.setSpacing(4)
 
         # Sample Feature Navigator
         nav_row = QHBoxLayout()
         nav_row.setSpacing(4)
         self.btn_prev_feat = QPushButton("◀ Prev")
         self.btn_prev_feat.setObjectName("quietButton")
-        self.btn_prev_feat.setToolTip("Preview with previous feature in layer")
         self.btn_prev_feat.clicked.connect(self._nav_prev_feature)
 
         self.feat_nav_lbl = QLabel("Sample Feature: 1")
-        self.feat_nav_lbl.setStyleSheet("font-size: 8pt; font-weight: 600; color: #64748b;")
+        self.feat_nav_lbl.setStyleSheet("font-size: 7.5pt; font-weight: 600; color: #64748b;")
         align_center = getattr(getattr(Qt, "AlignmentFlag", Qt), "AlignCenter", 0)
         self.feat_nav_lbl.setAlignment(align_center)
 
         self.btn_next_feat = QPushButton("Next ▶")
         self.btn_next_feat.setObjectName("quietButton")
-        self.btn_next_feat.setToolTip("Preview with next feature in layer")
         self.btn_next_feat.clicked.connect(self._nav_next_feature)
 
         self.btn_cycle_feat = QPushButton("🔀 Cycle")
         self.btn_cycle_feat.setObjectName("quietButton")
-        self.btn_cycle_feat.setToolTip("Jump across sample features")
         self.btn_cycle_feat.clicked.connect(self._nav_cycle_feature)
 
         nav_row.addWidget(self.btn_prev_feat)
@@ -464,228 +483,263 @@ class QgisMapTipsDock(QDockWidget):
         self.preview_tabs = QTabWidget()
         self.preview_box = QTextBrowser()
         self.preview_box.setObjectName("previewBox")
-        self.preview_box.setMinimumHeight(180)
+        self.preview_box.setMinimumHeight(120)
+        self.preview_box.setMaximumHeight(260)
         self.preview_box.setOpenLinks(False)
         self.preview_box.anchorClicked.connect(self._on_preview_link_clicked)
         self.preview_tabs.addTab(self.preview_box, "Rendered Card")
 
         self.expr_box = QPlainTextEdit()
         self.expr_box.setReadOnly(True)
-        self.expr_box.setMinimumHeight(180)
+        self.expr_box.setMinimumHeight(120)
+        self.expr_box.setMaximumHeight(260)
         self.expr_box.setStyleSheet(
-            "font-family: Consolas, 'Courier New', monospace; font-size: 8pt; background-color: #0f172a; color: #38bdf8; border-radius: 4px; padding: 4px;"
+            "font-family: Consolas, 'Courier New', monospace; font-size: 7.5pt; background-color: #0f172a; color: #38bdf8; border-radius: 4px; padding: 4px;"
         )
         self.preview_tabs.addTab(self.expr_box, "Expression Code")
         prev_layout.addWidget(self.preview_tabs)
 
         prev_btn_row = QHBoxLayout()
         self.copy_html_btn = QPushButton("📋 Copy HTML / Expression")
-        self.copy_html_btn.setToolTip("Copy the compiled MapTip HTML expression to the clipboard")
+        self.copy_html_btn.setObjectName("quietButton")
         self.copy_html_btn.clicked.connect(self._copy_html_to_clipboard)
         self.preview_status_lbl = QLabel("")
-        self.preview_status_lbl.setStyleSheet("font-size: 8pt; color: #10b981; font-weight: bold;")
+        self.preview_status_lbl.setStyleSheet("font-size: 7.5pt; color: #10b981; font-weight: bold;")
         prev_btn_row.addWidget(self.copy_html_btn)
         prev_btn_row.addWidget(self.preview_status_lbl)
         prev_btn_row.addStretch()
         prev_layout.addLayout(prev_btn_row)
 
-        scroll_layout.addWidget(grp_preview)
+        self.section_preview.add_layout(prev_layout)
+        scroll_layout.addWidget(self.section_preview)
 
         scroll.setWidget(scroll_widget)
-        layout.addWidget(scroll, 1)
+        outer_layout.addWidget(scroll, 1)
 
         # Bottom Action Buttons
         btn_layout = QHBoxLayout()
+        btn_layout.setContentsMargins(6, 4, 6, 6)
+        btn_layout.setSpacing(6)
+        self.clear_btn = QPushButton("🗑️ Clear")
+        self.clear_btn.setObjectName("secondaryAction")
+        self.clear_btn.clicked.connect(self._clear_maptip_from_layer)
+
         self.apply_btn = QPushButton("🚀 Apply MapTip to Layer")
         self.apply_btn.setObjectName("primaryAction")
         self.apply_btn.clicked.connect(self._apply_maptip_to_layer)
 
-        self.clear_btn = QPushButton("🗑️ Clear MapTip")
-        self.clear_btn.setObjectName("secondaryAction")
-        self.clear_btn.clicked.connect(self._clear_maptip_from_layer)
-
         btn_layout.addWidget(self.clear_btn)
         btn_layout.addWidget(self.apply_btn, 1)
-        layout.addLayout(btn_layout)
+        outer_layout.addLayout(btn_layout)
 
     def _build_actions_tab(self, parent: QWidget) -> None:
         outer_layout = QVBoxLayout(parent)
         outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(5)
 
-        info = QLabel(
-            "Select 1-click actions to inject into the active vector layer. "
-            "Actions use dynamic CRS transformation, point-on-surface calculation, "
-            "and are available on the canvas, in forms, attribute tables, and MapTip cards."
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet("font-size: 8.5pt; color: #475569;")
-        layout.addWidget(info)
-
-        grp_actions = QGroupBox("Universal Action Library")
-        act_layout = QVBoxLayout(grp_actions)
-        act_layout.setSpacing(6)
+        # 1. Collapsible: Action Library
+        self.sec_actions = CollapsibleSection("⚡ 1-Click Action Library", initially_expanded=True)
+        act_box = QVBoxLayout()
+        act_box.setContentsMargins(4, 4, 4, 4)
+        act_box.setSpacing(4)
 
         self.action_checkboxes: dict[str, QCheckBox] = {}
         for item in AVAILABLE_ACTIONS:
-            cb = QCheckBox(f"{item['name']} — {item['description']}")
+            cb = QCheckBox(item["name"])
+            cb.setToolTip(item["description"])
             cb.setChecked(item["key"] in ("google_satellite", "google_streetview", "tkgm_cadastre", "copy_clipboard", "export_card_report"))
-            act_layout.addWidget(cb)
+            act_box.addWidget(cb)
             self.action_checkboxes[item["key"]] = cb
 
         # Open File Option
         file_box = QHBoxLayout()
-        self.cb_open_file = QCheckBox("Open File/Link from Attribute:")
+        file_box.setSpacing(4)
+        self.cb_open_file = QCheckBox("Open File/Link:")
+        self.cb_open_file.setToolTip("Open local file path or URL stored in an attribute")
         self.file_field_combo = QComboBox()
         file_box.addWidget(self.cb_open_file)
         file_box.addWidget(self.file_field_combo, 1)
-        act_layout.addLayout(file_box)
+        act_box.addLayout(file_box)
 
         # Select Intersecting in Another Layer
         sel_box = QHBoxLayout()
-        self.cb_sel_intersect = QCheckBox("Select Intersecting in Layer:")
+        sel_box.setSpacing(4)
+        self.cb_sel_intersect = QCheckBox("Select Intersecting:")
+        self.cb_sel_intersect.setToolTip("Select intersecting features in target layer upon click")
         self.sel_layer_combo = QComboBox()
         sel_box.addWidget(self.cb_sel_intersect)
         sel_box.addWidget(self.sel_layer_combo, 1)
-        act_layout.addLayout(sel_box)
-
-        layout.addWidget(grp_actions)
+        act_box.addLayout(sel_box)
 
         self.inject_actions_btn = QPushButton("⚡ Inject Selected Actions into Layer")
         self.inject_actions_btn.setObjectName("primaryAction")
+        cursor = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
+        if cursor is not None:
+            self.inject_actions_btn.setCursor(cursor)
         self.inject_actions_btn.clicked.connect(self._apply_actions)
-        layout.addWidget(self.inject_actions_btn)
+        act_box.addWidget(self.inject_actions_btn)
 
-        # Live Layer Actions Inventory
-        grp_inventory = QGroupBox("Layer Actions Inventory (Active on Layer)")
-        inv_layout = QVBoxLayout(grp_inventory)
-        inv_layout.setSpacing(6)
+        self.sec_actions.add_layout(act_box)
+        layout.addWidget(self.sec_actions)
+
+        # 2. Collapsible: Active Actions Inventory
+        self.sec_inventory = CollapsibleSection("📋 Layer Actions Inventory", initially_expanded=True)
+        inv_box = QVBoxLayout()
+        inv_box.setContentsMargins(4, 4, 4, 4)
+        inv_box.setSpacing(4)
 
         self.active_actions_header = QLabel("No active actions on current layer")
-        self.active_actions_header.setStyleSheet("font-size: 8.5pt; font-weight: bold; color: #0f766e;")
-        inv_layout.addWidget(self.active_actions_header)
+        self.active_actions_header.setStyleSheet("font-size: 7.5pt; font-weight: bold; color: #0f766e;")
+        inv_box.addWidget(self.active_actions_header)
 
         self.active_actions_list = QListWidget()
-        self.active_actions_list.setMinimumHeight(100)
+        self.active_actions_list.setMaximumHeight(85)
         self.active_actions_list.setStyleSheet(
-            "QListWidget { border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; padding: 2px; }"
-            "QListWidget::item { padding: 4px 6px; border-bottom: 1px solid #f1f5f9; }"
+            "QListWidget { border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; padding: 2px; font-size: 8pt; }"
+            "QListWidget::item { padding: 3px 5px; border-bottom: 1px solid #f1f5f9; }"
             "QListWidget::item:selected { background: #0f766e; color: #ffffff; border-radius: 3px; }"
         )
-        inv_layout.addWidget(self.active_actions_list)
+        inv_box.addWidget(self.active_actions_list)
 
         inv_btn_row = QHBoxLayout()
+        inv_btn_row.setSpacing(4)
         self.btn_run_action = QPushButton("▶ Run on Feature")
+        self.btn_run_action.setObjectName("quietButton")
         self.btn_run_action.setToolTip("Run selected action using the current sample feature")
         self.btn_run_action.clicked.connect(self._on_run_selected_action)
 
-        self.btn_activate_qgis_tool = QPushButton("🎯 Activate QGIS Tool")
+        self.btn_activate_qgis_tool = QPushButton("🎯 Canvas Action Tool")
+        self.btn_activate_qgis_tool.setObjectName("quietButton")
         self.btn_activate_qgis_tool.setToolTip("Activate QGIS canvas 'Run Feature Action' tool to click map features")
         self.btn_activate_qgis_tool.clicked.connect(self._on_activate_qgis_action_tool)
 
         self.btn_clear_actions = QPushButton("🗑 Clear Actions")
+        self.btn_clear_actions.setObjectName("quietButton")
         self.btn_clear_actions.setToolTip("Remove actions from the active layer")
         self.btn_clear_actions.clicked.connect(self._on_clear_layer_actions)
 
         inv_btn_row.addWidget(self.btn_run_action)
         inv_btn_row.addWidget(self.btn_activate_qgis_tool)
         inv_btn_row.addWidget(self.btn_clear_actions)
-        inv_layout.addLayout(inv_btn_row)
+        inv_box.addLayout(inv_btn_row)
 
-        layout.addWidget(grp_inventory)
+        self.sec_inventory.add_layout(inv_box)
+        layout.addWidget(self.sec_inventory)
 
-        # Compact Canvas Cadastre Strip under Actions (Turkey Only)
+        # 3. Collapsible: Quick Canvas Cadastre (TKGM)
+        self.sec_cadastre = CollapsibleSection("🇹🇷 Quick Canvas Cadastre (TKGM)", initially_expanded=True)
+        cad_box = QVBoxLayout()
+        cad_box.setContentsMargins(4, 4, 4, 4)
+        cad_box.setSpacing(4)
+
         cadastre_strip = QFrame()
         cadastre_strip.setObjectName("cadastreCompactStrip")
         cadastre_strip.setStyleSheet(
-            "QFrame#cadastreCompactStrip { background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 2px 5px; }"
+            "QFrame#cadastreCompactStrip { background: #fffbeb; border: 1px solid #fde68a; border-radius: 4px; padding: 4px 6px; }"
         )
-        cad_layout = QHBoxLayout(cadastre_strip)
-        cad_layout.setContentsMargins(3, 1, 3, 1)
-        cad_layout.setSpacing(5)
+        cad_strip_layout = QVBoxLayout(cadastre_strip)
+        cad_strip_layout.setContentsMargins(4, 4, 4, 4)
+        cad_strip_layout.setSpacing(4)
 
+        top_cad_row = QHBoxLayout()
+        top_cad_row.setSpacing(5)
         tr_badge = QLabel("🇹🇷 TR")
         tr_badge.setStyleSheet(
             "background: #dc2626; color: #ffffff; font-weight: bold; font-size: 7pt; border-radius: 2px; padding: 1px 3px;"
         )
         tr_badge.setToolTip("Republic of Turkey Cadastral Coverage Only (TKGM MEGSİS)")
-
-        cad_lbl = QLabel("<b>Canvas Cadastre:</b>")
+        cad_lbl = QLabel("<b>Instant Canvas Cadastre:</b>")
         cad_lbl.setStyleSheet("font-size: 8pt; color: #78350f;")
+        top_cad_row.addWidget(tr_badge)
+        top_cad_row.addWidget(cad_lbl)
+        top_cad_row.addStretch()
+        cad_strip_layout.addLayout(top_cad_row)
 
-        self.btn_canvas_cadastre = QPushButton("⚡ Click Canvas to Download")
+        self.btn_canvas_cadastre = QPushButton("⚡ Click Canvas to Download Parcel")
         self.btn_canvas_cadastre.setObjectName("amberCompact")
         self.btn_canvas_cadastre.setToolTip(
             "Click anywhere on map canvas to query and download the parcel polygon into QGIS without selecting a layer (Turkey Only, ~100 daily fair-use quota)"
         )
         self.btn_canvas_cadastre.setStyleSheet(
-            "QPushButton { background: #d97706; color: #ffffff; font-weight: bold; border-radius: 3px; padding: 3px 8px; font-size: 8pt; }"
+            "QPushButton { background: #d97706; color: #ffffff; font-weight: bold; border-radius: 3px; padding: 4px 8px; font-size: 8pt; }"
             "QPushButton:hover { background: #b45309; }"
         )
-        cursor_hand = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
-        if cursor_hand is not None:
-            self.btn_canvas_cadastre.setCursor(cursor_hand)
+        if cursor is not None:
+            self.btn_canvas_cadastre.setCursor(cursor)
         self.btn_canvas_cadastre.clicked.connect(self._toggle_canvas_cadastre_tool)
+        cad_strip_layout.addWidget(self.btn_canvas_cadastre)
 
-        cad_layout.addWidget(tr_badge)
-        cad_layout.addWidget(cad_lbl)
-        cad_layout.addWidget(self.btn_canvas_cadastre, 1)
-        layout.addWidget(cadastre_strip)
+        cad_note = QLabel("1-click parcel download into 'TKGM Parselleri (TR)' layer with centroid labels.")
+        cad_note.setStyleSheet("font-size: 7.5pt; color: #92400e;")
+        cad_note.setWordWrap(True)
+        cad_strip_layout.addWidget(cad_note)
 
-        # Helpful usage guide card
+        cad_box.addWidget(cadastre_strip)
+        self.sec_cadastre.add_layout(cad_box)
+        layout.addWidget(self.sec_cadastre)
+
+        # 4. Collapsible: 3 Ways to Trigger Layer Actions Guide
+        self.sec_guide = CollapsibleSection("💡 3 Ways to Trigger Layer Actions", initially_expanded=False)
         guide_box = QFrame()
         guide_box.setStyleSheet(
-            "QFrame { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 6px; }"
+            "QFrame { background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 4px; padding: 4px; }"
         )
         guide_layout = QVBoxLayout(guide_box)
-        guide_layout.setContentsMargins(6, 6, 6, 6)
-        guide_layout.setSpacing(3)
-        guide_title = QLabel("💡 3 Ways to Execute Layer Actions in QGIS:")
-        guide_title.setStyleSheet("font-weight: bold; font-size: 8.5pt; color: #1e293b;")
-        guide_item1 = QLabel("1. <b>Inside MapTip Card:</b> Hover over feature on canvas, click action pills directly.")
-        guide_item1.setStyleSheet("font-size: 8pt; color: #475569;")
-        guide_item2 = QLabel("2. <b>On Canvas:</b> Click '🎯 Activate QGIS Tool' (yellow gear) and click any feature.")
-        guide_item2.setStyleSheet("font-size: 8pt; color: #475569;")
-        guide_item3 = QLabel("3. <b>In Tables:</b> Right-click any row in the Attribute Table or Identify dialog.")
-        guide_item3.setStyleSheet("font-size: 8pt; color: #475569;")
-        guide_layout.addWidget(guide_title)
+        guide_layout.setContentsMargins(4, 4, 4, 4)
+        guide_layout.setSpacing(2)
+        guide_item1 = QLabel("1. <b>Inside MapTip:</b> Hover feature on canvas, click action pills directly.")
+        guide_item1.setStyleSheet("font-size: 7.5pt; color: #475569;")
+        guide_item2 = QLabel("2. <b>On Canvas:</b> Click '🎯 Canvas Action Tool' and click any feature on map.")
+        guide_item2.setStyleSheet("font-size: 7.5pt; color: #475569;")
+        guide_item3 = QLabel("3. <b>In Tables:</b> Right-click any row in Attribute Table or Identify dialog.")
+        guide_item3.setStyleSheet("font-size: 7.5pt; color: #475569;")
         guide_layout.addWidget(guide_item1)
         guide_layout.addWidget(guide_item2)
         guide_layout.addWidget(guide_item3)
-        layout.addWidget(guide_box)
+        self.sec_guide.add_widget(guide_box)
+        layout.addWidget(self.sec_guide)
 
         layout.addStretch()
         scroll.setWidget(scroll_content)
         outer_layout.addWidget(scroll)
 
     def _build_hud_tab(self, parent: QWidget) -> None:
-        layout = QVBoxLayout(parent)
-        layout.setContentsMargins(8, 8, 8, 8)
-        layout.setSpacing(8)
+        outer_layout = QVBoxLayout(parent)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
 
-        info = QLabel(
-            "Live Canvas HUD enables non-blocking pixel value inspection when hovering over "
-            "raster layers (DEM, Slope, NDVI, Orthophoto) with debounced sampling, custom reticle cursor, "
-            "and composite vector+raster multi-layer inspection."
-        )
-        info.setWordWrap(True)
-        info.setStyleSheet("font-size: 8.5pt; color: #475569;")
-        layout.addWidget(info)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
 
-        grp_hud = QGroupBox("HUD Inspection Controls")
-        form_hud = QFormLayout(grp_hud)
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(5)
+
+        # 1. Collapsible: HUD Inspection Controls
+        self.sec_hud_ctrl = CollapsibleSection("🎯 Live Canvas HUD Controls", initially_expanded=True)
+        form_hud = QFormLayout()
+        form_hud.setContentsMargins(4, 4, 4, 4)
+        form_hud.setSpacing(4)
 
         hud_switch_row = QHBoxLayout()
         hud_switch_lbl = QLabel("Live Canvas HUD Active:")
-        hud_switch_lbl.setStyleSheet("font-weight: bold; font-size: 9pt;")
-        self.hud_switch = IOSToggleSwitch(default_on=False)
+        hud_switch_lbl.setStyleSheet("font-weight: bold; font-size: 8.5pt;")
+        self.hud_switch = IOSToggleSwitch(default_on=False, width=46, height=22)
         self.hud_switch.setToolTip("Activate real-time raster & vector HUD inspection on canvas hover")
         self.hud_switch.toggled.connect(self._toggle_hud)
         hud_switch_row.addWidget(hud_switch_lbl)
@@ -693,19 +747,19 @@ class QgisMapTipsDock(QDockWidget):
         hud_switch_row.addWidget(self.hud_switch)
         form_hud.addRow(hud_switch_row)
 
-        self.hud_cursor_cb = QCheckBox("Use Precision Reticle Cursor on Canvas")
+        self.hud_cursor_cb = QCheckBox("Precision Reticle Cursor on Canvas")
         self.hud_cursor_cb.setChecked(True)
         self.hud_cursor_cb.setToolTip("Replaces the default hand cursor with an inspection crosshair & locator badge")
         self.hud_cursor_cb.toggled.connect(lambda c: self._hud.set_use_custom_cursor(c))
         form_hud.addRow("", self.hud_cursor_cb)
 
-        self.hud_pin_cb = QCheckBox("📌 Pin / Freeze Tooltip (Shift+Click canvas to toggle)")
+        self.hud_pin_cb = QCheckBox("📌 Pin / Freeze Tooltip (Shift+Click canvas)")
         self.hud_pin_cb.setToolTip("Freezes current tooltip stationary on canvas so it will not close or move")
         self.hud_pin_cb.toggled.connect(lambda c: self._hud.set_pinned(c))
         self._hud.pinStateChanged.connect(self.hud_pin_cb.setChecked)
         form_hud.addRow("", self.hud_pin_cb)
 
-        self.hud_composite_cb = QCheckBox("Composite Mode (Inspect All Visible Rasters + Top Vector)")
+        self.hud_composite_cb = QCheckBox("Composite Mode (All Rasters + Top Vector)")
         self.hud_composite_cb.toggled.connect(self._on_hud_composite_toggled)
         form_hud.addRow("", self.hud_composite_cb)
 
@@ -720,26 +774,33 @@ class QgisMapTipsDock(QDockWidget):
         self.hud_debounce_spin.valueChanged.connect(self._on_hud_debounce_changed)
         form_hud.addRow("Dwell Debounce:", self.hud_debounce_spin)
 
-        layout.addWidget(grp_hud)
+        self.sec_hud_ctrl.add_layout(form_hud)
+        layout.addWidget(self.sec_hud_ctrl)
 
-        # Live Inspected Values in Dock (Permanent View)
-        grp_feed = QGroupBox("Live Sampled Values Feed (Permanent View)")
-        feed_layout = QVBoxLayout(grp_feed)
+        # 2. Collapsible: Live Sampled Values Feed
+        self.sec_hud_feed = CollapsibleSection("📊 Live Sampled Values Feed", initially_expanded=True)
+        feed_layout = QVBoxLayout()
+        feed_layout.setContentsMargins(4, 4, 4, 4)
+        feed_layout.setSpacing(4)
         self.hud_live_browser = QTextBrowser()
-        self.hud_live_browser.setMinimumHeight(140)
+        self.hud_live_browser.setMinimumHeight(100)
+        self.hud_live_browser.setMaximumHeight(180)
         self.hud_live_browser.setStyleSheet(
-            "background-color: #0f172a; color: #f8fafc; border-radius: 4px; border: 1px solid #334155;"
+            "background-color: #0f172a; color: #f8fafc; border-radius: 4px; border: 1px solid #334155; font-size: 8pt;"
         )
         self.hud_live_browser.setHtml(
-            "<div style='color:#64748b; font-size:9pt; padding:10px;'>"
+            "<div style='color:#64748b; font-size:8pt; padding:8px;'>"
             "Hover over the map canvas to inspect raster bands and vector features. "
             "Values remain permanently visible here even after moving the mouse away.</div>"
         )
         feed_layout.addWidget(self.hud_live_browser)
         self._hud.sampleUpdated.connect(lambda html_val, _: self.hud_live_browser.setHtml(html_val))
-        layout.addWidget(grp_feed)
+        self.sec_hud_feed.add_layout(feed_layout)
+        layout.addWidget(self.sec_hud_feed)
 
         layout.addStretch()
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll)
 
     # ──────────────────────────────────────────────────────────────────────────
     # Layer & Event Handlers
@@ -1188,7 +1249,7 @@ class QgisMapTipsDock(QDockWidget):
         # Synchronize layer MapTip card template if action ribbon is enabled
         if self.cb_card_actions.isChecked():
             with contextlib.suppress(Exception):
-                cfg = self._get_current_config()
+                cfg = self._build_config_from_ui()
                 html_text = compile_maptip_html(cfg)
                 self._current_layer.setMapTipTemplate(html_text)
 
@@ -1385,9 +1446,13 @@ class QgisMapTipsDock(QDockWidget):
                 self.iface.messageBar().pushWarning("TKGM Cadastre", "No sample feature with valid geometry found in selected layer.")
             return
 
-        import datetime
-        from qgis.PyQt.QtNetwork import QNetworkRequest
-        from qgis.core import QgsNetworkAccessManager
+        from ..core.cadastre_tool import (
+            add_parcel_feature,
+            get_or_create_cadastre_layer,
+            is_in_turkey_bounds,
+            parse_tkgm_response,
+            query_tkgm_megsis,
+        )
 
         try:
             pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid()
@@ -1396,57 +1461,38 @@ class QgisMapTipsDock(QDockWidget):
             wgs = tr.transform(pt)
             lat, lon = round(wgs.y(), 6), round(wgs.x(), 6)
 
-            url = f"https://cbsapi.tkgm.gov.tr/megsiswebapi.v3.1/api/parsel/{lat}/{lon}/"
-            req = QNetworkRequest(QUrl(url))
-            req.setRawHeader(b"User-Agent", b"Mozilla/5.0")
-            reply = QgsNetworkAccessManager.instance().blockingGet(req)
-            data = json.loads(reply.content().data().decode("utf-8"))
-            p = data.get("properties", {})
-            il = str(p.get("ilAd", "") or "")
-            ilce = str(p.get("ilceAd", "") or "")
-            mah = str(p.get("mahalleAd", "") or "")
-            ada = str(p.get("adaNo", "") or "")
-            parsel = str(p.get("parselNo", "") or "")
-            alan = str(p.get("alan", "") or "")
-            nitelik = str(p.get("nitelik", "") or "")
-            mevkii = str(p.get("mevkii", "") or "")
-            ozet = str(p.get("ozet", "") or f"{mah}-{ada}/{parsel}")
+            if not is_in_turkey_bounds(lat, lon):
+                if hasattr(self.iface, "messageBar"):
+                    self.iface.messageBar().pushWarning("TKGM Cadastre", f"Coordinates ({lat}, {lon}) fall outside Turkey bounds.")
+                return
 
-            summary = f"TKGM: {il} / {ilce} / {mah} | Block: {ada}, Parcel: {parsel} | Area: {alan} m² | {nitelik}"
+            success, data, err_msg = query_tkgm_megsis(lat, lon)
+            if not success:
+                if hasattr(self.iface, "messageBar"):
+                    self.iface.messageBar().pushWarning("TKGM Cadastre", f"TKGM sorgusu başarısız: {err_msg}")
+                return
+
+            parcel_info = parse_tkgm_response(data)
+            if not parcel_info:
+                if hasattr(self.iface, "messageBar"):
+                    self.iface.messageBar().pushWarning("TKGM Cadastre", "Belirtilen koordinatta resmi parsel bulunamadı.")
+                return
+
+            summary = (
+                f"TKGM: {parcel_info['il']} / {parcel_info['ilce']} / {parcel_info['mahalle']} | "
+                f"Ada: {parcel_info['ada_no']}, Parsel: {parcel_info['parsel_no']} | "
+                f"Alan: {parcel_info['alan_m2']} m² | {parcel_info['nitelik']}"
+            )
             QApplication.clipboard().setText(summary)
 
-            coords = data.get("geometry", {}).get("coordinates", [])
-            if coords:
-                rings = [[QgsPointXY(c[0], c[1]) for c in ring] for ring in coords]
-                poly_geom = QgsGeometry.fromPolygonXY(rings)
-                t_layers = QgsProject.instance().mapLayersByName("TKGM Cadastre Parcels (TR)")
-                if t_layers:
-                    t_layer = t_layers[0]
-                else:
-                    uri = "Polygon?crs=EPSG:4326&field=province:string(50)&field=district:string(50)&field=neighborhood:string(50)&field=block_no:string(20)&field=parcel_no:string(20)&field=area_m2:double&field=land_type:string(100)&field=locality:string(100)&field=parcel_key:string(60)&field=query_date:string(30)"
-                    t_layer = QgsVectorLayer(uri, "TKGM Cadastre Parcels (TR)", "memory")
-                    sym = t_layer.renderer().symbol()
-                    if sym:
-                        sym.setColor(QColor(245, 158, 11, 45))
-                        sym.symbolLayer(0).setStrokeColor(QColor(217, 119, 6))
-                        sym.symbolLayer(0).setStrokeWidth(0.6)
-                    QgsProject.instance().addMapLayer(t_layer)
-
-                existing = {str(ft["parcel_key"]) for ft in t_layer.getFeatures() if ft["parcel_key"]}
-                if ozet not in existing:
-                    alan_val = float(alan.replace(",", "").strip() or 0.0) if alan else 0.0
-                    now_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M")
-                    f = QgsFeature(t_layer.fields())
-                    f.setGeometry(poly_geom)
-                    f.setAttributes([il, ilce, mah, ada, parsel, alan_val, nitelik, mevkii, ozet, now_str])
-                    t_layer.dataProvider().addFeatures([f])
-                    t_layer.triggerRepaint()
+            cadastre_layer = get_or_create_cadastre_layer(QgsProject.instance())
+            is_new, msg, _ = add_parcel_feature(cadastre_layer, parcel_info)
 
             if hasattr(self.iface, "messageBar"):
-                self.iface.messageBar().pushInfo("TKGM Cadastre", f"🏛️ {summary} (Copied to clipboard & added to layer)")
+                self.iface.messageBar().pushInfo("TKGM Cadastre", f"🏛️ {summary} ({msg})")
         except Exception as exc:
             if hasattr(self.iface, "messageBar"):
-                self.iface.messageBar().pushWarning("TKGM Cadastre", f"TKGM query failed (no parcel found at coordinate or service unavailable): {exc}")
+                self.iface.messageBar().pushWarning("TKGM Cadastre", f"TKGM sorgu hatası: {exc}")
 
     def _on_preset_selected(self, index: int) -> None:
         preset_file = self.preset_combo.currentData()
