@@ -179,6 +179,28 @@ def test_processing_provider():
     return _ok(f"QgisMapTipsProvider loaded {len(algs)} algorithms ({', '.join(names)})", has_both)
 
 
+def test_layer_removal_safety(iface):
+    from qgis.core import QgsProject
+    from qgis_maptips.dialogs.dock import QgisMapTipsDock
+
+    app = QgsApplication.instance()
+    lyr = QgsVectorLayer("Point?crs=EPSG:4326&field=name:string", "Removal Test Layer", "memory")
+    QgsProject.instance().addMapLayer(lyr)
+
+    dock = QgisMapTipsDock(iface)
+    if app:
+        app.processEvents()
+
+    # Trigger layer removal from project while dock is bound
+    QgsProject.instance().removeMapLayer(lyr.id())
+    if app:
+        app.processEvents()
+
+    dock.unload()
+    dock.close()
+    return _ok("dock safely handles layer removal without SIP RuntimeError", True)
+
+
 def run_all(iface):
     print("=" * 60)
     print(" qgis_maptips - lifecycle & core smoke tests")
@@ -187,6 +209,7 @@ def run_all(iface):
         test_metadata(),
         test_class_factory(),
         test_lifecycle(iface),
+        test_layer_removal_safety(iface),
         test_maptip_injection(),
         test_action_injection(),
         test_processing_provider(),

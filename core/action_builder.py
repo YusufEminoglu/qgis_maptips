@@ -9,8 +9,31 @@ from __future__ import annotations
 import contextlib
 from typing import TYPE_CHECKING, Any
 
+try:
+    from qgis.PyQt import sip
+except ImportError:
+    sip = None
+
 if TYPE_CHECKING:
     from qgis.core import QgsVectorLayer
+
+
+def is_layer_alive(layer: Any) -> bool:
+    """Safely check whether a QgsMapLayer instance is alive in C++ and valid.
+
+    Prevents SIP 'wrapped C/C++ object of type ... has been deleted' RuntimeError.
+    """
+    if layer is None:
+        return False
+    if sip is not None:
+        with contextlib.suppress(TypeError, ValueError):
+            if sip.isdeleted(layer):
+                return False
+    try:
+        return bool(layer.isValid())
+    except (RuntimeError, ReferenceError, AttributeError):
+        return False
+
 
 # Dynamic WGS84 coordinates that automatically resolve layer CRS, handle Turkish/European decimal commas, and guarantee point on surface
 LAT_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometry), centroid($geometry)), coalesce(@layer_crs, 'EPSG:4326'), 'EPSG:4326'), coalesce(to_string(round(y(@wgs), 6)), '0.0')) %]"
@@ -328,7 +351,7 @@ def apply_actions_to_layer(
 
     Returns the number of added actions.
     """
-    if not layer or not layer.isValid():
+    if not is_layer_alive(layer):
         return 0
 
     from qgis.core import QgsAction
@@ -384,7 +407,7 @@ def apply_actions_to_layer(
 
 def get_layer_actions(layer: "QgsVectorLayer") -> list[dict[str, Any]]:
     """Return a list of dictionaries describing all actions currently attached to the layer."""
-    if not layer or not layer.isValid():
+    if not is_layer_alive(layer):
         return []
     res = []
     manager = layer.actions()
@@ -403,7 +426,7 @@ def get_layer_actions(layer: "QgsVectorLayer") -> list[dict[str, Any]]:
 
 def remove_all_actions(layer: "QgsVectorLayer") -> int:
     """Clear all actions from the layer's action manager and return the count removed."""
-    if not layer or not layer.isValid():
+    if not is_layer_alive(layer):
         return 0
     manager = layer.actions()
     count = len(list(manager.actions()))

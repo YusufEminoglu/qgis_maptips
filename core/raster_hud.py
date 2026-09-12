@@ -34,6 +34,8 @@ from qgis.core import (
 )
 from qgis.gui import QgsHighlight
 
+from .action_builder import is_layer_alive
+
 if TYPE_CHECKING:
     from qgis.gui import QgsMapCanvas
 
@@ -88,8 +90,11 @@ def create_inspection_cursor() -> QCursor:
 
 def evaluate_vector_feature_maptip(layer: QgsVectorLayer, feat: QgsFeature) -> str:
     """Evaluate feature MapTip template or return clean fallback card HTML."""
-    if not layer or not layer.isValid() or not feat or not feat.isValid():
+    if not is_layer_alive(layer) or not feat:
         return ""
+    with contextlib.suppress(Exception):
+        if hasattr(feat, "isValid") and not feat.isValid():
+            return ""
 
     template = layer.mapTipTemplate()
     if template and template.strip():
@@ -244,16 +249,16 @@ class CanvasHoverHUD(QObject):
 
     def set_active_vector(self, layer: Optional[QgsVectorLayer]) -> None:
         """Set primary target vector layer for feature inspection."""
-        self._active_vector_layer = layer if (layer and layer.isValid()) else None
+        self._active_vector_layer = layer if is_layer_alive(layer) else None
         if not self._pinned:
             self._clear_highlight()
 
     def set_active_raster(self, layer: Optional[QgsRasterLayer]) -> None:
         """Set fallback raster layer."""
-        self._active_raster_layers = [layer] if (layer and layer.isValid()) else []
+        self._active_raster_layers = [layer] if is_layer_alive(layer) else []
 
     def set_target_rasters(self, layers: list[QgsRasterLayer]) -> None:
-        self._active_raster_layers = [lyr for lyr in layers if lyr and lyr.isValid()]
+        self._active_raster_layers = [lyr for lyr in layers if is_layer_alive(lyr)]
 
     def set_vector_layer(self, layer: Optional[QgsVectorLayer]) -> None:
         self.set_active_vector(layer)
@@ -316,12 +321,12 @@ class CanvasHoverHUD(QObject):
         if pinned:
             self._pinned_global_pos = self._last_global_pos
             self._pinned_screen_pos = self._last_screen_pos
-            if self._current_feature and self._current_layer and self._current_feature.hasGeometry():
+            if self._current_feature and is_layer_alive(self._current_layer) and self._current_feature.hasGeometry():
                 self._update_highlight(self._current_feature.geometry(), self._current_layer, pinned=True)
             if self._last_sampled_html:
                 self._display_hud(self._last_sampled_html)
             self.pinStateChanged.emit(True)
-            if self._current_layer and self._current_feature:
+            if is_layer_alive(self._current_layer) and self._current_feature:
                 self.featurePinned.emit(self._current_layer, self._current_feature, self._last_sampled_html)
         else:
             self._clear_highlight()
@@ -411,16 +416,16 @@ class CanvasHoverHUD(QObject):
 
     def _resolve_target_vector_layer(self) -> Optional[QgsVectorLayer]:
         """Resolve the vector layer to inspect: active vector or top visible vector layer."""
-        if self._active_vector_layer and self._active_vector_layer.isValid():
+        if is_layer_alive(self._active_vector_layer):
             return self._active_vector_layer
 
-        curr = self.canvas.currentLayer()
-        if isinstance(curr, QgsVectorLayer) and curr.isValid():
+        curr = self.canvas.currentLayer() if self.canvas else None
+        if is_layer_alive(curr) and isinstance(curr, QgsVectorLayer):
             return curr
 
         # Fallback to first visible vector layer in project
         for lyr in QgsProject.instance().mapLayers().values():
-            if isinstance(lyr, QgsVectorLayer) and lyr.isValid():
+            if is_layer_alive(lyr) and isinstance(lyr, QgsVectorLayer):
                 return lyr
         return None
 
@@ -436,7 +441,7 @@ class CanvasHoverHUD(QObject):
         vlayer = self._resolve_target_vector_layer()
         matched_feature: Optional[QgsFeature] = None
 
-        if vlayer and vlayer.isValid():
+        if is_layer_alive(vlayer):
             vlayer_crs = vlayer.crs()
             if vlayer_crs != canvas_crs and canvas_crs.isValid() and vlayer_crs.isValid():
                 tr_v = QgsCoordinateTransform(canvas_crs, vlayer_crs, project)
@@ -480,7 +485,7 @@ class CanvasHoverHUD(QObject):
 
         # 2. Secondary Fallback: Raster Cell Sampling (if raster layer active)
         target_rasters = self._active_raster_layers or [
-            lyr for lyr in project.mapLayers().values() if isinstance(lyr, QgsRasterLayer) and lyr.isValid()
+            lyr for lyr in project.mapLayers().values() if is_layer_alive(lyr) and isinstance(lyr, QgsRasterLayer)
         ]
 
         if target_rasters:

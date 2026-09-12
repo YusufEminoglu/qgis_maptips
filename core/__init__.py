@@ -20,6 +20,7 @@ from .action_builder import (
     build_custom_url_action,
     build_open_file_action,
     build_select_intersecting_action,
+    is_layer_alive,
 )
 
 
@@ -48,5 +49,6 @@ __all__ = [
     "build_open_file_action",
     "build_select_intersecting_action",
     "build_custom_url_action",
+    "is_layer_alive",
     "CanvasHoverHUD",
 ]

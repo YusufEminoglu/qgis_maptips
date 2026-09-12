@@ -60,6 +60,7 @@ from ..core.action_builder import (
     AVAILABLE_ACTIONS,
     apply_actions_to_layer,
     get_layer_actions,
+    is_layer_alive,
     remove_all_actions,
 )
 from ..core.raster_hud import CanvasHoverHUD, evaluate_vector_feature_maptip
@@ -108,6 +109,7 @@ class QgisMapTipsDock(QDockWidget):
 
         self._hud = CanvasHoverHUD(self.canvas, debounce_ms=250, parent=self)
         self._current_layer: Optional[QgsMapLayer] = None
+        self._current_layer_id: Optional[str] = None
         self._cadastre_tool: Optional[Any] = None
 
         # Debounced preview timer (150ms) to ensure fluid typing & UI responsiveness
@@ -132,6 +134,7 @@ class QgisMapTipsDock(QDockWidget):
                 self.iface.actionMapTips().toggled.connect(self._sync_maptip_action_state)
 
         # Connect layer signals
+        QgsProject.instance().layersWillBeRemoved.connect(self._on_layers_will_be_removed)
         QgsProject.instance().layersAdded.connect(self._refresh_layers)
         QgsProject.instance().layersRemoved.connect(self._refresh_layers)
         self.iface.currentLayerChanged.connect(self._on_qgis_active_layer_changed)
@@ -987,13 +990,25 @@ class QgisMapTipsDock(QDockWidget):
     # Layer & Event Handlers
     # ──────────────────────────────────────────────────────────────────────────
 
-    def _refresh_layers(self) -> None:
+    def _on_layers_will_be_removed(self, layer_ids: Any) -> None:
+        """Safely detach and clear layer bindings before C++ deletion."""
+        target_ids = set(layer_ids) if isinstance(layer_ids, (list, tuple, set)) else {str(layer_ids)}
+        if self._current_layer_id and self._current_layer_id in target_ids:
+            if hasattr(self, "_current_layer") and is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
+                with contextlib.suppress(Exception):
+                    self._current_layer.selectionChanged.disconnect(self._on_layer_selection_changed)
+            self._current_layer = None
+            self._current_layer_id = None
+            if hasattr(self, "_hud") and self._hud:
+                self._hud.set_vector_layer(None)
+
+    def _refresh_layers(self, *args: Any) -> None:
         target_id = None
         active_lyr = self.iface.activeLayer() if hasattr(self.iface, "activeLayer") else None
-        if active_lyr and active_lyr.isValid():
+        if is_layer_alive(active_lyr):
             target_id = active_lyr.id()
-        elif hasattr(self, "_current_layer") and self._current_layer and self._current_layer.isValid():
-            target_id = self._current_layer.id()
+        elif self._current_layer_id and QgsProject.instance().mapLayer(self._current_layer_id):
+            target_id = self._current_layer_id
         else:
             target_id = self.layer_combo.currentData()
 
@@ -1005,7 +1020,7 @@ class QgisMapTipsDock(QDockWidget):
         self.rel_layer_combo.clear()
         self.sel_layer_combo.clear()
 
-        layers = list(QgsProject.instance().mapLayers().values())
+        layers = [lyr for lyr in QgsProject.instance().mapLayers().values() if is_layer_alive(lyr)]
         for lyr in layers:
             icon = "🗺️ " if isinstance(lyr, QgsVectorLayer) else "▦ "
             self.layer_combo.addItem(f"{icon}{lyr.name()}", lyr.id())
@@ -1024,7 +1039,7 @@ class QgisMapTipsDock(QDockWidget):
             if target_idx < 0:
                 for i in range(self.layer_combo.count()):
                     lyr = QgsProject.instance().mapLayer(self.layer_combo.itemData(i))
-                    if isinstance(lyr, QgsVectorLayer):
+                    if is_layer_alive(lyr) and isinstance(lyr, QgsVectorLayer):
                         target_idx = i
                         break
                 if target_idx < 0:
@@ -1040,35 +1055,35 @@ class QgisMapTipsDock(QDockWidget):
             self._on_target_layer_selected(-1)
 
     def _on_qgis_active_layer_changed(self, layer: Optional[QgsMapLayer]) -> None:
-        if layer and layer.isValid():
+        if is_layer_alive(layer):
             idx = self.layer_combo.findData(layer.id())
             if idx >= 0:
                 if idx != self.layer_combo.currentIndex():
                     self.layer_combo.setCurrentIndex(idx)
-                elif self._current_layer is None or (hasattr(self._current_layer, "id") and self._current_layer.id() != layer.id()):
+                elif self._current_layer is None or (self._current_layer_id != layer.id()):
                     self._on_target_layer_selected(idx)
             else:
                 self._refresh_layers()
 
     def _resolve_target_layer(self) -> Optional[QgsVectorLayer]:
         """Defensively resolves and guarantees an active vector layer is bound if available."""
-        if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+        if is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
             return self._current_layer
 
         if hasattr(self.iface, "activeLayer"):
             act = self.iface.activeLayer()
-            if isinstance(act, QgsVectorLayer) and act.isValid():
+            if is_layer_alive(act) and isinstance(act, QgsVectorLayer):
                 idx = self.layer_combo.findData(act.id())
                 if idx >= 0:
                     if self.layer_combo.currentIndex() != idx:
                         self.layer_combo.setCurrentIndex(idx)
                     self._on_target_layer_selected(idx)
-                    if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+                    if is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
                         return self._current_layer
                     return act
                 else:
                     self._refresh_layers()
-                    if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+                    if is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
                         return self._current_layer
 
         if self.layer_combo.count() > 0:
@@ -1078,7 +1093,7 @@ class QgisMapTipsDock(QDockWidget):
             lyr_id = self.layer_combo.itemData(idx) or self.layer_combo.currentData()
             if lyr_id:
                 lyr = QgsProject.instance().mapLayer(lyr_id)
-                if isinstance(lyr, QgsVectorLayer) and lyr.isValid():
+                if is_layer_alive(lyr) and isinstance(lyr, QgsVectorLayer):
                     self._on_target_layer_selected(idx)
                     return lyr
 
@@ -1086,7 +1101,7 @@ class QgisMapTipsDock(QDockWidget):
                 lid = self.layer_combo.itemData(i)
                 if lid:
                     lyr = QgsProject.instance().mapLayer(lid)
-                    if isinstance(lyr, QgsVectorLayer) and lyr.isValid():
+                    if is_layer_alive(lyr) and isinstance(lyr, QgsVectorLayer):
                         self.layer_combo.setCurrentIndex(i)
                         self._on_target_layer_selected(i)
                         return lyr
@@ -1094,24 +1109,29 @@ class QgisMapTipsDock(QDockWidget):
         return None
 
     def _on_target_layer_selected(self, index: int) -> None:
-        if hasattr(self, "_current_layer") and isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+        if hasattr(self, "_current_layer") and is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
             with contextlib.suppress(Exception):
                 self._current_layer.selectionChanged.disconnect(self._on_layer_selection_changed)
 
         if index < 0 or self.layer_combo.count() == 0:
             self._current_layer = None
+            self._current_layer_id = None
             self.layer_info_label.setText("No layer selected")
             self._update_preview()
             return
 
         lyr_id = self.layer_combo.itemData(index) if 0 <= index < self.layer_combo.count() else self.layer_combo.currentData()
         layer = QgsProject.instance().mapLayer(lyr_id) if lyr_id else None
-        self._current_layer = layer
 
-        if not layer or not layer.isValid():
+        if not is_layer_alive(layer):
+            self._current_layer = None
+            self._current_layer_id = None
             self.layer_info_label.setText("Invalid layer")
             self._update_preview()
             return
+
+        self._current_layer = layer
+        self._current_layer_id = layer.id()
 
         if isinstance(layer, QgsVectorLayer):
             cnt = layer.featureCount()
@@ -1136,7 +1156,7 @@ class QgisMapTipsDock(QDockWidget):
 
     def _on_layer_selection_changed(self) -> None:
         """Reactively synchronize live card preview when canvas feature selection changes."""
-        if not isinstance(self._current_layer, QgsVectorLayer) or not self._current_layer.isValid():
+        if not is_layer_alive(self._current_layer) or not isinstance(self._current_layer, QgsVectorLayer):
             return
         selected = self._current_layer.selectedFeatures()
         if selected:
@@ -1150,7 +1170,7 @@ class QgisMapTipsDock(QDockWidget):
         """Fetch up to 50 sample features for rapid card preview cycling."""
         self._sample_features = []
         self._sample_feat_index = 0
-        if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+        if is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
             with contextlib.suppress(Exception):
                 req = QgsFeatureRequest()
                 if hasattr(QgsFeatureRequest, "Flag") and hasattr(QgsFeatureRequest.Flag, "NoGeometry"):
@@ -1377,7 +1397,7 @@ class QgisMapTipsDock(QDockWidget):
         self._update_preview()
 
     def _refresh_donut_combos_from_layer(self) -> None:
-        if not hasattr(self, "_donut_slice_rows") or not self._current_layer:
+        if not hasattr(self, "_donut_slice_rows") or not is_layer_alive(self._current_layer):
             return
         fields = self._current_layer.fields()
         for row in self._donut_slice_rows:
@@ -1417,7 +1437,7 @@ class QgisMapTipsDock(QDockWidget):
 
         combo_fld = QComboBox()
         combo_fld.addItem("(None)", "")
-        if self._current_layer:
+        if is_layer_alive(self._current_layer):
             for f in self._current_layer.fields():
                 fn = f.name()
                 is_num = _is_numeric_field(f)
@@ -1488,7 +1508,7 @@ class QgisMapTipsDock(QDockWidget):
     def _on_add_donut_slice_clicked(self) -> None:
         selected_fields = {r["combo"].currentData() for r in self._donut_slice_rows}
         next_field = ""
-        if self._current_layer:
+        if is_layer_alive(self._current_layer):
             for f in self._current_layer.fields():
                 fn = f.name()
                 is_num = _is_numeric_field(f)
@@ -1499,7 +1519,7 @@ class QgisMapTipsDock(QDockWidget):
         self._update_preview()
 
     def _auto_detect_donut_fields(self) -> None:
-        if not self._current_layer:
+        if not is_layer_alive(self._current_layer):
             return
         num_fields = [f.name() for f in self._current_layer.fields() if _is_numeric_field(f)]
 
@@ -1566,7 +1586,7 @@ class QgisMapTipsDock(QDockWidget):
             self.expr_box.setPlainText(raw_html)
 
         layer = self._resolve_target_layer()
-        if isinstance(layer, QgsVectorLayer) and layer.isValid():
+        if is_layer_alive(layer) and isinstance(layer, QgsVectorLayer):
             sample_feature = None
             has_selection = bool(layer.selectedFeatureCount() > 0)
             if getattr(self, "_sample_features", []):
@@ -1752,7 +1772,7 @@ class QgisMapTipsDock(QDockWidget):
             return
         self.active_actions_list.clear()
         layer = self._resolve_target_layer()
-        if not isinstance(layer, QgsVectorLayer) or not layer.isValid():
+        if not is_layer_alive(layer) or not isinstance(layer, QgsVectorLayer):
             self.active_actions_header.setText("Select a valid vector layer to view active actions")
             return
 
@@ -2088,9 +2108,9 @@ class QgisMapTipsDock(QDockWidget):
         # Retain preset donut and sparkline fields
         if hasattr(cfg, "donut_fields") and cfg.donut_fields:
             self._preset_donut_fields = cfg.donut_fields
-            layer_fnames = self._current_layer.fields().names() if self._current_layer else []
+            layer_fnames = self._current_layer.fields().names() if is_layer_alive(self._current_layer) else []
             matches_layer = any(fld in layer_fnames for fld, _, _ in cfg.donut_fields)
-            if matches_layer or not self._current_layer:
+            if matches_layer or not is_layer_alive(self._current_layer):
                 self._set_donut_slices_in_ui(cfg.donut_fields)
             else:
                 self._auto_detect_donut_fields()
@@ -2221,7 +2241,7 @@ class QgisMapTipsDock(QDockWidget):
     def _on_hud_zoom_feature(self) -> None:
         feat = getattr(self._hud, "_current_feature", None)
         layer = getattr(self._hud, "_current_layer", None)
-        if not feat or not layer or not feat.hasGeometry():
+        if not feat or not is_layer_alive(layer) or not feat.hasGeometry():
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushInfo("Qgis MapTips", "No feature currently inspected to zoom to.")
             return
@@ -2238,7 +2258,7 @@ class QgisMapTipsDock(QDockWidget):
     def _on_hud_copy_feature(self) -> None:
         feat = getattr(self._hud, "_current_feature", None)
         layer = getattr(self._hud, "_current_layer", None)
-        if not feat or not layer:
+        if not feat or not is_layer_alive(layer):
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushWarning("Qgis MapTips", "No feature currently inspected to copy.")
             return
@@ -2250,7 +2270,7 @@ class QgisMapTipsDock(QDockWidget):
     def _on_hud_export_feature(self) -> None:
         feat = getattr(self._hud, "_current_feature", None)
         layer = getattr(self._hud, "_current_layer", None)
-        if not feat or not layer:
+        if not feat or not is_layer_alive(layer):
             if hasattr(self.iface, "messageBar"):
                 self.iface.messageBar().pushWarning("Qgis MapTips", "No feature currently inspected to export.")
             return
@@ -2296,6 +2316,7 @@ class QgisMapTipsDock(QDockWidget):
         """Clean up listeners and filters on plugin unload."""
         self._hud.stop()
         with contextlib.suppress(Exception):
+            QgsProject.instance().layersWillBeRemoved.disconnect(self._on_layers_will_be_removed)
             QgsProject.instance().layersAdded.disconnect(self._refresh_layers)
             QgsProject.instance().layersRemoved.disconnect(self._refresh_layers)
             self.iface.currentLayerChanged.disconnect(self._on_qgis_active_layer_changed)
@@ -2303,5 +2324,5 @@ class QgisMapTipsDock(QDockWidget):
             if hasattr(self.iface, "actionMapTips") and self.iface.actionMapTips():
                 self.iface.actionMapTips().toggled.disconnect(self._sync_maptip_action_state)
         with contextlib.suppress(Exception):
-            if hasattr(self, "_current_layer") and isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+            if hasattr(self, "_current_layer") and is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
                 self._current_layer.selectionChanged.disconnect(self._on_layer_selection_changed)
