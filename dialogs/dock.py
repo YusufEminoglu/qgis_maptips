@@ -879,7 +879,7 @@ class QgisMapTipsDock(QDockWidget):
         form_hud.addRow("", self.hud_highlight_cb)
 
         self.hud_cursor_cb = QCheckBox("🎯 High-Visibility Reticle Cursor")
-        self.hud_cursor_cb.setChecked(False)
+        self.hud_cursor_cb.setChecked(True)
         self.hud_cursor_cb.setToolTip("Replaces standard pointer with inspection crosshairs on canvas")
         self.hud_cursor_cb.toggled.connect(self._on_hud_cursor_toggled)
         form_hud.addRow("", self.hud_cursor_cb)
@@ -2028,13 +2028,16 @@ class QgisMapTipsDock(QDockWidget):
         self._sync_cursor_state()
 
     def _sync_cursor_state(self) -> None:
-        """Only set reticle cursor if user explicitly enabled custom cursor checkbox."""
-        want_cursor = bool(
-            hasattr(self, "hud_cursor_cb")
-            and self.hud_cursor_cb.isChecked()
-            and hasattr(self, "hud_switch")
-            and self.hud_switch.isChecked()
-        )
+        """Keep the canvas inspection reticle cursor active whenever MapTips or Inspector is active."""
+        maptips_on = bool(hasattr(self, "maptips_switch") and self.maptips_switch.isChecked())
+        hud_on = bool(hasattr(self, "hud_switch") and self.hud_switch.isChecked())
+        current_tab = self.tabs.currentIndex() if hasattr(self, "tabs") else 0
+
+        cursor_cb = getattr(self, "hud_cursor_cb", None)
+        cursor_allowed = cursor_cb.isChecked() if cursor_cb is not None else True
+
+        # Keep reticle cursor active whenever MapTips is ON (on Designer / Inspect tabs) or when Inspector is active
+        want_cursor = cursor_allowed and (hud_on or (maptips_on and current_tab in (0, 2)))
         self._hud.set_cursor_mode(want_cursor)
 
     def _on_hud_cursor_toggled(self, checked: bool) -> None:

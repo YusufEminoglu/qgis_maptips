@@ -163,7 +163,7 @@ class CanvasHoverHUD(QObject):
 
         self._hud_enabled = False
         self._cursor_enabled = False
-        self._use_custom_cursor = False  # Keep standard cursor by default
+        self._use_custom_cursor = True  # High-visibility reticle cursor enabled by default
         self._filter_installed = False
         self._pinned = False
         self._highlight_enabled = True
@@ -177,6 +177,23 @@ class CanvasHoverHUD(QObject):
         self._inspection_cursor: Optional[QCursor] = None
         with contextlib.suppress(Exception):
             self._inspection_cursor = create_inspection_cursor()
+
+    def _apply_cursor(self, enabled: bool) -> None:
+        """Apply or remove custom inspection cursor on both canvas and viewport."""
+        vp = self.canvas.viewport() if self.canvas else None
+        if not vp:
+            return
+        if enabled and self._use_custom_cursor and self._inspection_cursor:
+            vp.setCursor(self._inspection_cursor)
+            with contextlib.suppress(Exception):
+                if hasattr(self.canvas, "setCursor"):
+                    self.canvas.setCursor(self._inspection_cursor)
+        else:
+            with contextlib.suppress(Exception):
+                vp.unsetCursor()
+            with contextlib.suppress(Exception):
+                if hasattr(self.canvas, "unsetCursor"):
+                    self.canvas.unsetCursor()
 
     def _sync_canvas_event_filter(self) -> None:
         """Attach or detach viewport event filter based on inspector state."""
@@ -193,11 +210,7 @@ class CanvasHoverHUD(QObject):
                 vp.removeEventFilter(self)
             self._filter_installed = False
 
-        if self._cursor_enabled and self._use_custom_cursor and self._inspection_cursor:
-            vp.setCursor(self._inspection_cursor)
-        elif not self._cursor_enabled or not self._use_custom_cursor:
-            with contextlib.suppress(Exception):
-                vp.unsetCursor()
+        self._apply_cursor(self._cursor_enabled and self._use_custom_cursor)
 
     def set_cursor_mode(self, enabled: bool) -> None:
         """Toggle unique inspection reticle cursor."""
@@ -318,26 +331,32 @@ class CanvasHoverHUD(QObject):
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         etype = event.type()
-        ev_mouse_move = getattr(QEvent.Type, "MouseMove", QEvent.MouseMove)
-        ev_enter = getattr(QEvent.Type, "Enter", QEvent.Enter)
-        ev_leave = getattr(QEvent.Type, "Leave", QEvent.Leave)
-        ev_press = getattr(QEvent.Type, "MouseButtonPress", QEvent.MouseButtonPress)
-        ev_key_press = getattr(QEvent.Type, "KeyPress", QEvent.KeyPress)
+        if hasattr(QEvent, "Type"):
+            ev_mouse_move = QEvent.Type.MouseMove
+            ev_enter = QEvent.Type.Enter
+            ev_leave = QEvent.Type.Leave
+            ev_press = QEvent.Type.MouseButtonPress
+            ev_key_press = QEvent.Type.KeyPress
+        else:
+            ev_mouse_move = getattr(QEvent, "MouseMove", 5)
+            ev_enter = getattr(QEvent, "Enter", 10)
+            ev_leave = getattr(QEvent, "Leave", 11)
+            ev_press = getattr(QEvent, "MouseButtonPress", 2)
+            ev_key_press = getattr(QEvent, "KeyPress", 6)
 
         vp = self.canvas.viewport() if self.canvas else None
 
         # Enforce custom cursor if enabled
         if self._cursor_enabled and self._use_custom_cursor and self._inspection_cursor and vp:
             if etype in (ev_mouse_move, ev_enter):
-                if vp.cursor().shape() != self._inspection_cursor.shape():
-                    vp.setCursor(self._inspection_cursor)
+                vp.setCursor(self._inspection_cursor)
 
         if not self._hud_enabled:
             return super().eventFilter(watched, event)
 
         # 1. Escape key dismisses pinned tooltip
         if etype == ev_key_press:
-            key_esc = getattr(Qt.Key, "Key_Escape", None)
+            key_esc = getattr(Qt.Key, "Key_Escape", None) if hasattr(Qt, "Key") else getattr(Qt, "Key_Escape", None)
             if hasattr(event, "key") and event.key() == key_esc:
                 if self._pinned:
                     self.set_pinned(False)
@@ -363,8 +382,8 @@ class CanvasHoverHUD(QObject):
 
         # 3. Mouse Click Handling (Click to Pin or Unpin)
         elif etype == ev_press:
-            btn_left = getattr(Qt.MouseButton, "LeftButton", None)
-            mod_shift = getattr(Qt.KeyboardModifier, "ShiftModifier", None)
+            btn_left = getattr(Qt.MouseButton, "LeftButton", None) if hasattr(Qt, "MouseButton") else getattr(Qt, "LeftButton", None)
+            mod_shift = getattr(Qt.KeyboardModifier, "ShiftModifier", None) if hasattr(Qt, "KeyboardModifier") else getattr(Qt, "ShiftModifier", None)
             is_left = hasattr(event, "button") and event.button() == btn_left
             is_shift = bool(hasattr(event, "modifiers") and mod_shift and (event.modifiers() & mod_shift))
 
