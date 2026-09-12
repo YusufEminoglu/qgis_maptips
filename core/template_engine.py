@@ -334,7 +334,10 @@ def build_card_action_buttons_row(action_keys: list[str], pal: dict[str, str], c
         raw_title = act.get("short_title", act["name"])
         clean_title = raw_title.lstrip("⚡ ").strip()
         title = html.escape(clean_title)
-        href = act["command"] if act.get("type") == "OpenUrl" else f"action:{key}"
+        if act.get("type") == "OpenUrl":
+            href = act["command"]
+        else:
+            href = f"action:{key}?layer=[% @layer_id %]&id=[% $id %]"
         buttons.append(
             f'<td style="padding:2px 3px;">'
             f'<a href="{href}" style="display:inline-block; padding:3px 6px; '

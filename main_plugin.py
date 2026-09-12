@@ -89,7 +89,19 @@ class QgisMapTipsPlugin:
         self.about_action.triggered.connect(self._show_about)
         self.iface.addPluginToMenu(self.MENU_NAME, self.about_action)
 
+        # 6. Global Action URL Scheme Handler (enables 1-click card actions from canvas MapTips)
+        from .core.action_builder import ActionUrlHandler
+        from qgis.PyQt.QtGui import QDesktopServices
+        self.action_url_handler = ActionUrlHandler(self.iface)
+        QDesktopServices.setUrlHandler("action", self.action_url_handler, "handleUrl")
+
     def unload(self) -> None:
+        if hasattr(self, "action_url_handler") and self.action_url_handler is not None:
+            with contextlib.suppress(Exception):
+                from qgis.PyQt.QtGui import QDesktopServices
+                QDesktopServices.unsetUrlHandler("action")
+            self.action_url_handler = None
+
         canvas = self.iface.mapCanvas() if self.iface and hasattr(self.iface, "mapCanvas") else None
         if canvas and hasattr(canvas, "mapToolSet"):
             with contextlib.suppress(Exception):

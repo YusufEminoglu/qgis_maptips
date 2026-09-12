@@ -18,36 +18,55 @@ LON_EXPR = "[% with_variable('wgs', transform(coalesce(point_on_surface($geometr
 
 # Self-contained portable Python script for copying attributes to clipboard
 CLIPBOARD_PYTHON_CODE = (
-    "from qgis.PyQt.QtWidgets import QApplication; "
-    "from qgis.core import QgsProject; "
-    "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
-    "feat = layer.getFeature([% $id %]) if layer else None; "
-    "lines = [f'{field.name()}: {feat[field.name()]}' for field in layer.fields()] if feat else []; "
-    "QApplication.clipboard().setText('\\n'.join(lines)); "
-    "from qgis.utils import iface; "
-    "iface.messageBar().pushInfo('Qgis MapTips', 'Attributes copied to clipboard.') if hasattr(iface, 'messageBar') else None"
+    "from qgis.PyQt.QtWidgets import QApplication\n"
+    "from qgis.core import QgsProject\n"
+    "from qgis.utils import iface\n"
+    "layer = QgsProject.instance().mapLayer('[% @layer_id %]')\n"
+    "if not layer and iface:\n"
+    "    layer = iface.activeLayer()\n"
+    "feat = layer.getFeature([% $id %]) if layer else None\n"
+    "if not feat and layer:\n"
+    "    sel = layer.selectedFeatures()\n"
+    "    feat = sel[0] if sel else None\n"
+    "if feat and layer:\n"
+    "    lines = [f'{fld.name()}: {feat[fld.name()]}' for fld in layer.fields()]\n"
+    "    text = '\\n'.join(lines)\n"
+    "    QApplication.clipboard().setText(text)\n"
+    "    if hasattr(iface, 'messageBar') and iface.messageBar():\n"
+    "        iface.messageBar().pushSuccess('Qgis MapTips', f'Copied {len(lines)} attributes to clipboard.')\n"
 )
 
 # 1-Click HTML Card Report Opener
 EXPORT_CARD_REPORT_PYTHON_CODE = (
-    "import tempfile, webbrowser, os; "
-    "from qgis.core import QgsProject, QgsExpression, QgsExpressionContext, QgsExpressionContextUtils; "
-    "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
-    "feat = layer.getFeature([% $id %]) if layer else None; "
-    "tmpl = layer.mapTipTemplate() if layer else ''; "
-    "if feat and tmpl: "
-    "    ctx = QgsExpressionContext(); "
-    "    ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer)); "
-    "    ctx.setFeature(feat); "
-    "    html_text = QgsExpression.replaceExpressionText(tmpl, ctx); "
-    "    full_html = ('<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Feature Report</title>' "
-    "                 '<style>body{font-family:sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}' "
-    "                 '.card-wrap{box-shadow:0 10px 25px rgba(0,0,0,0.1);background:#fff;border-radius:6px;overflow:hidden;}' "
-    "                 '</style></head><body><div class=\"card-wrap\">' + html_text + '</div></body></html>'); "
-    "    tmp = os.path.join(tempfile.gettempdir(), f'feature_card_[% $id %].html'); "
-    "    with open(tmp, 'w', encoding='utf-8') as f: f.write(full_html); "
-    "    u_tmp = tmp.replace('\\\\', '/'); "
-    "    webbrowser.open(f'file:///{u_tmp}')"
+    "import tempfile, os\n"
+    "from qgis.PyQt.QtCore import QUrl\n"
+    "from qgis.PyQt.QtGui import QDesktopServices\n"
+    "from qgis.core import QgsProject, QgsExpression, QgsExpressionContext, QgsExpressionContextUtils\n"
+    "from qgis.utils import iface\n"
+    "layer = QgsProject.instance().mapLayer('[% @layer_id %]')\n"
+    "if not layer and iface:\n"
+    "    layer = iface.activeLayer()\n"
+    "feat = layer.getFeature([% $id %]) if layer else None\n"
+    "if not feat and layer:\n"
+    "    sel = layer.selectedFeatures()\n"
+    "    feat = sel[0] if sel else None\n"
+    "tmpl = layer.mapTipTemplate() if layer else ''\n"
+    "if feat and tmpl:\n"
+    "    ctx = QgsExpressionContext()\n"
+    "    ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))\n"
+    "    ctx.setFeature(feat)\n"
+    "    html_text = QgsExpression.replaceExpressionText(tmpl, ctx)\n"
+    "    full_html = ('<!DOCTYPE html><html><head><meta charset=\"utf-8\"><title>Feature Report</title>'\n"
+    "                 '<style>body{font-family:-apple-system,BlinkMacSystemFont,\"Segoe UI\",Roboto,sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}'\n"
+    "                 '.card-wrap{box-shadow:0 10px 25px rgba(0,0,0,0.1);background:#fff;border-radius:6px;overflow:hidden;}'\n"
+    "                 '</style></head><body><div class=\"card-wrap\">' + html_text + '</div></body></html>')\n"
+    "    fid = feat.id() if hasattr(feat, 'id') else 1\n"
+    "    tmp = os.path.join(tempfile.gettempdir(), f'feature_card_{fid}.html')\n"
+    "    with open(tmp, 'w', encoding='utf-8') as f:\n"
+    "        f.write(full_html)\n"
+    "    QDesktopServices.openUrl(QUrl.fromLocalFile(tmp))\n"
+    "    if hasattr(iface, 'messageBar') and iface.messageBar():\n"
+    "        iface.messageBar().pushSuccess('Qgis MapTips', 'Opened feature card report in browser.')\n"
 )
 
 # Instant MEGSIS Cadastral Query Python Action (0.2s API query + adds polygon layer + copies summary)
@@ -391,4 +410,146 @@ def remove_all_actions(layer: "QgsVectorLayer") -> int:
     with contextlib.suppress(Exception):
         manager.clearActions()
     return count
+
+
+try:
+    from qgis.PyQt.QtCore import QObject, QUrl, QUrlQuery, pyqtSlot
+    from qgis.PyQt.QtGui import QDesktopServices
+    from qgis.PyQt.QtWidgets import QApplication
+    from qgis.core import (
+        QgsCoordinateReferenceSystem,
+        QgsCoordinateTransform,
+        QgsExpression,
+        QgsExpressionContext,
+        QgsExpressionContextUtils,
+        QgsProject,
+        QgsVectorLayer,
+    )
+except ImportError:
+    class QObject:  # type: ignore
+        def __init__(self, *args: Any, **kwargs: Any) -> None: pass
+    class QUrl:  # type: ignore
+        pass
+    class QUrlQuery:  # type: ignore
+        pass
+    def pyqtSlot(*args: Any, **kwargs: Any) -> Any:  # type: ignore
+        def decorator(fn: Any) -> Any: return fn
+        return decorator
+
+
+class ActionUrlHandler(QObject):
+    """Global Qt URL handler for 'action:' scheme links embedded in MapTip cards."""
+
+    def __init__(self, iface: Any = None) -> None:
+        super().__init__()
+        self.iface = iface
+
+    @pyqtSlot(QUrl)
+    def handleUrl(self, url: QUrl) -> None:
+        url_str = url.toString()
+        query = QUrlQuery(url)
+        lyr_id = query.queryItemValue("layer")
+        fid_str = query.queryItemValue("id")
+        action_key = url.path() or url_str.split("?", 1)[0].replace("action:", "").strip("/")
+
+        layer = QgsProject.instance().mapLayer(lyr_id) if lyr_id else None
+        if not layer and self.iface and hasattr(self.iface, "activeLayer"):
+            layer = self.iface.activeLayer()
+
+        feat = None
+        if layer and fid_str and fid_str.lstrip("-").isdigit():
+            with contextlib.suppress(Exception):
+                feat = layer.getFeature(int(fid_str))
+        if not feat and layer:
+            with contextlib.suppress(Exception):
+                sel = layer.selectedFeatures()
+                feat = sel[0] if sel else None
+        if not feat and layer:
+            with contextlib.suppress(Exception):
+                for f in layer.getFeatures():
+                    feat = f
+                    break
+
+        if "copy_clipboard" in action_key:
+            if feat and layer:
+                lines = [f"{field.name()}: {feat[field.name()]}" for field in layer.fields()]
+                QApplication.clipboard().setText("\n".join(lines))
+                if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                    self.iface.messageBar().pushSuccess(
+                        "Qgis MapTips", f"Copied {len(lines)} attributes to clipboard."
+                    )
+            elif self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushWarning(
+                    "Qgis MapTips", "No feature available to copy attributes from."
+                )
+
+        elif "export_card_report" in action_key:
+            if feat and layer:
+                import os, tempfile
+                raw_html = layer.mapTipTemplate()
+                ctx = QgsExpressionContext()
+                ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+                ctx.setFeature(feat)
+                evaluated = QgsExpression.replaceExpressionText(raw_html, ctx)
+                full_html = (
+                    '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Feature Card Report</title>'
+                    '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}'
+                    '.card-wrap{box-shadow:0 10px 25px rgba(0,0,0,0.1);background:#fff;border-radius:6px;overflow:hidden;}'
+                    '</style></head><body><div class="card-wrap">' + evaluated + '</div></body></html>'
+                )
+                fid = feat.id() if hasattr(feat, "id") else 1
+                tmp = os.path.join(tempfile.gettempdir(), f"feature_card_{fid}.html")
+                with open(tmp, "w", encoding="utf-8") as fp:
+                    fp.write(full_html)
+                QDesktopServices.openUrl(QUrl.fromLocalFile(tmp))
+                if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                    self.iface.messageBar().pushSuccess(
+                        "Qgis MapTips", "Opened feature card report in browser."
+                    )
+            elif self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushWarning(
+                    "Qgis MapTips", "No feature available to export report from."
+                )
+
+        elif "tkgm_cadastre" in action_key or "tkgm_api_instant" in action_key:
+            if feat and layer:
+                from .cadastre_tool import (
+                    add_parcel_feature,
+                    get_or_create_cadastre_layer,
+                    is_in_turkey_bounds,
+                    parse_tkgm_response,
+                    query_tkgm_megsis,
+                )
+                if not feat.hasGeometry():
+                    return
+                pos = feat.geometry().pointOnSurface() if not feat.geometry().pointOnSurface().isEmpty() else feat.geometry().centroid()
+                pt = pos.asPoint()
+                tr = QgsCoordinateTransform(layer.crs(), QgsCoordinateReferenceSystem("EPSG:4326"), QgsProject.instance())
+                wgs = tr.transform(pt)
+                lat, lon = round(wgs.y(), 6), round(wgs.x(), 6)
+                if not is_in_turkey_bounds(lat, lon):
+                    if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                        self.iface.messageBar().pushWarning("TKGM Cadastre", f"Coordinates ({lat}, {lon}) fall outside Turkey bounds.")
+                    return
+                success, data, err_msg = query_tkgm_megsis(lat, lon)
+                if not success:
+                    if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                        self.iface.messageBar().pushWarning("TKGM Cadastre", f"TKGM sorgusu başarısız: {err_msg}")
+                    return
+                parcel_info = parse_tkgm_response(data)
+                if not parcel_info:
+                    if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                        self.iface.messageBar().pushWarning("TKGM Cadastre", "Belirtilen koordinatta resmi parsel bulunamadı.")
+                    return
+                summary = (
+                    f"TKGM: {parcel_info['il']} / {parcel_info['ilce']} / {parcel_info['mahalle']} | "
+                    f"Ada: {parcel_info['ada_no']}, Parsel: {parcel_info['parsel_no']} | "
+                    f"Alan: {parcel_info['alan_m2']} m² | {parcel_info['nitelik']}"
+                )
+                QApplication.clipboard().setText(summary)
+                cadastre_layer = get_or_create_cadastre_layer(QgsProject.instance())
+                is_new, msg, _ = add_parcel_feature(cadastre_layer, parcel_info)
+                if self.iface and hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                    self.iface.messageBar().pushSuccess("TKGM Cadastre", f"🏛️ {summary} ({msg})")
+
 

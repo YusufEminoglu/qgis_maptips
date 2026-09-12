@@ -1631,7 +1631,10 @@ class QgisMapTipsDock(QDockWidget):
 
         act_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
         feat = getattr(self, "_current_sample_feat", None)
-        if not feat:
+        if not feat and isinstance(self._current_layer, QgsVectorLayer):
+            sel = self._current_layer.selectedFeatures()
+            feat = sel[0] if sel else None
+        if not feat and isinstance(self._current_layer, QgsVectorLayer):
             with contextlib.suppress(Exception):
                 for f in self._current_layer.getFeatures():
                     feat = f
@@ -1641,9 +1644,37 @@ class QgisMapTipsDock(QDockWidget):
             QMessageBox.warning(self, "Qgis MapTips", "No feature available to run action on.")
             return
 
-        with contextlib.suppress(Exception):
-            self._current_layer.actions().doActionFeature(act_data["id"], feat)
-            if hasattr(self.iface, "messageBar"):
+        act_name_lower = act_data.get("name", "").lower()
+        cmd = act_data.get("command", "")
+        act_type = str(act_data.get("type", ""))
+
+        if "clipboard" in act_name_lower or "copy" in act_name_lower:
+            self._copy_attributes_of_sample_feature()
+        elif "report" in act_name_lower or "export" in act_name_lower:
+            self._export_sample_card_report()
+        elif "tkgm" in act_name_lower:
+            self._run_sample_instant_tkgm()
+        elif "zoom" in act_name_lower and feat.hasGeometry() and self.canvas:
+            box = feat.geometry().boundingBox()
+            pad = max(15.0, max(box.width(), box.height()) * 0.15)
+            self.canvas.setExtent(box.buffered(pad))
+            self.canvas.refresh()
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushSuccess("Qgis MapTips", f"Zoomed to feature ID {feat.id()}.")
+        elif "OpenUrl" in act_type or act_type == "0":
+            ctx = QgsExpressionContext()
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(self._current_layer))
+            ctx.setFeature(feat)
+            expanded_url = QgsExpression.replaceExpressionText(cmd, ctx)
+            QDesktopServices.openUrl(QUrl(expanded_url.strip()))
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushSuccess(
+                    "Qgis MapTips", f"Opened URL for '{act_data['name']}'."
+                )
+        else:
+            with contextlib.suppress(Exception):
+                self._current_layer.actions().doActionFeature(act_data["id"], feat)
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
                 self.iface.messageBar().pushSuccess(
                     "Qgis MapTips", f"Executed '{act_data['name']}' on feature ID {feat.id()}."
                 )
@@ -1718,21 +1749,37 @@ class QgisMapTipsDock(QDockWidget):
     def _copy_attributes_of_sample_feature(self) -> None:
         feat = getattr(self, "_current_sample_feat", None)
         layer = self._current_layer
+        if not feat and isinstance(layer, QgsVectorLayer):
+            sel = layer.selectedFeatures()
+            feat = sel[0] if sel else None
+        if not feat and isinstance(layer, QgsVectorLayer):
+            with contextlib.suppress(Exception):
+                for f in layer.getFeatures():
+                    feat = f
+                    break
         if feat and isinstance(layer, QgsVectorLayer):
             lines = [f"{field.name()}: {feat[field.name()]}" for field in layer.fields()]
             QApplication.clipboard().setText("\n".join(lines))
-            if hasattr(self.iface, "messageBar"):
-                self.iface.messageBar().pushSuccess("Qgis MapTips", "Feature attributes copied to clipboard.")
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushSuccess("Qgis MapTips", f"Copied {len(lines)} attributes to clipboard.")
             elif hasattr(self, "preview_status_lbl"):
                 self.preview_status_lbl.setText("Attributes copied!")
         else:
-            if hasattr(self.iface, "messageBar"):
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
                 self.iface.messageBar().pushWarning("Qgis MapTips", "No feature available to copy attributes from.")
 
     def _export_sample_card_report(self) -> None:
-        import os, tempfile, webbrowser
+        import os, tempfile
         feat = getattr(self, "_current_sample_feat", None)
         layer = self._current_layer
+        if not feat and isinstance(layer, QgsVectorLayer):
+            sel = layer.selectedFeatures()
+            feat = sel[0] if sel else None
+        if not feat and isinstance(layer, QgsVectorLayer):
+            with contextlib.suppress(Exception):
+                for f in layer.getFeatures():
+                    feat = f
+                    break
         raw_html = getattr(self, "_current_raw_html", "")
         if not raw_html and isinstance(layer, QgsVectorLayer):
             raw_html = layer.mapTipTemplate() or compile_maptip_html(self._build_config_from_ui())
@@ -1743,15 +1790,16 @@ class QgisMapTipsDock(QDockWidget):
             evaluated = QgsExpression.replaceExpressionText(raw_html, ctx)
             full_html = (
                 '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Feature Card Report</title>'
-                '<style>body{font-family:Segoe UI, sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}'
+                '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}'
                 '.card-wrap{box-shadow:0 10px 25px rgba(0,0,0,0.1);background:#fff;border-radius:6px;overflow:hidden;}'
                 '</style></head><body><div class="card-wrap">' + evaluated + '</div></body></html>'
             )
-            tmp = os.path.join(tempfile.gettempdir(), f"feature_card_report_{feat.id()}.html")
+            fid = feat.id() if hasattr(feat, "id") else 1
+            tmp = os.path.join(tempfile.gettempdir(), f"feature_card_report_{fid}.html")
             with open(tmp, "w", encoding="utf-8") as f:
                 f.write(full_html)
-            webbrowser.open(f"file:///{tmp}")
-            if hasattr(self.iface, "messageBar"):
+            QDesktopServices.openUrl(QUrl.fromLocalFile(tmp))
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
                 self.iface.messageBar().pushSuccess("Qgis MapTips", "Opened standalone HTML report in browser.")
 
     def _run_sample_instant_tkgm(self) -> None:
