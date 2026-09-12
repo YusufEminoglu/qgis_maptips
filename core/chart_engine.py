@@ -52,17 +52,18 @@ def build_segmented_bar_table(
     if not segments:
         return ""
 
-    expr_parts = [f"coalesce({expr}, 0)" for expr, _, _ in segments]
+    expr_parts = [f"coalesce(try(to_real({expr}), 0.0), 0.0)" for expr, _, _ in segments]
     total_expr = " + ".join(expr_parts)
 
     cells = []
     legend_items = []
     for expr, label, color in segments:
-        pct_expr = f"clamp(0.0, round(100.0 * (coalesce({expr}, 0)) / (nullif({total_expr}, 0)), 1), 100.0)"
+        safe_val = f"coalesce(try(to_real({expr}), 0.0), 0.0)"
+        pct_expr = f"coalesce(clamp(0.0, round(100.0 * ({safe_val}) / (nullif({total_expr}, 0.0)), 1), 100.0), 0.0)"
         cells.append(f'<td width="[% {pct_expr} %]%" bgcolor="{color}" title="{html.escape(label)}"></td>')
         legend_items.append(
             f'<span style="color:{color}; font-weight:bold;">&#9632;</span> '
-            f'<span style="color:#475569; font-size:9px;">{html.escape(label)}: [% {expr} %]</span>'
+            f'<span style="color:#475569; font-size:9px;">{html.escape(label)}: [% {safe_val} %]</span>'
         )
 
     cells_html = "".join(cells)
@@ -108,12 +109,12 @@ def build_svg_donut_data_uri(
     for expr, _, color in slices:
         safe_clr = color.replace("#", "%23")
         safe_val = f"coalesce(try(to_real({expr}), 0.0), 0.0)"
-        pct = f"clamp(0.0, round(100.0 * ({safe_val}) / (nullif({total_expr}, 0.0)), 1), 100.0)"
+        pct = f"coalesce(clamp(0.0, round(100.0 * ({safe_val}) / (nullif({total_expr}, 0.0)), 1), 100.0), 0.0)"
         circles.append(
             f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{safe_clr}" '
             f'stroke-width="{stroke_width/4.0:.1f}" '
             f'stroke-dasharray="[% {pct} %] [% 100.0 - ({pct}) %]" '
-            f'stroke-dashoffset="[% {offset_expr} %]"/>'
+            f'stroke-dashoffset="[% coalesce({offset_expr}, 25.0) %]"/>'
         )
         offset_expr = f"({offset_expr} - ({pct}))"
 

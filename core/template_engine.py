@@ -410,15 +410,19 @@ def compile_maptip_html(config: TemplateConfig) -> str:
         )
 
     elif config.archetype == Archetype.DONUT_CHART:
-        raw_slices = config.donut_fields
+        raw_slices = [s for s in config.donut_fields if s and len(s) >= 3 and str(s[0]).strip()]
         if not raw_slices and config.attribute_fields:
             donut_palette = ["#10b981", "#3b82f6", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4"]
             raw_slices = [
                 (fld, lbl or fld, donut_palette[i % len(donut_palette)])
                 for i, (fld, lbl) in enumerate(config.attribute_fields[:5])
+                if fld and str(fld).strip()
             ]
         if raw_slices:
-            slices = [(f'"{f}"', lbl, clr) for f, lbl, clr in raw_slices]
+            slices = [
+                (f'"{f}"' if not (str(f).startswith('"') and str(f).endswith('"')) else str(f), lbl, clr)
+                for f, lbl, clr in raw_slices
+            ]
             donut_svg = build_svg_donut_data_uri(slices, size=76, stroke_width=16)
             seg_bar = build_segmented_bar_table(slices, height_px=8)
             lines.append(

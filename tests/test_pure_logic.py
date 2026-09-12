@@ -62,6 +62,10 @@ class TestChartEngine(unittest.TestCase):
         self.assertTrue(img_tag.startswith("<img src='data:image/svg+xml;utf8,<svg"))
         self.assertIn("stroke-dasharray", img_tag)
         self.assertIn("%2310b981", img_tag)
+        self.assertIn("coalesce", img_tag)
+
+    def test_svg_donut_empty(self):
+        self.assertEqual(build_svg_donut_data_uri([]), "")
 
     def test_svg_sparkline(self):
         fields = ["pop_2020", "pop_2021", "pop_2022", "pop_2024"]
@@ -127,6 +131,19 @@ class TestTemplateEngine(unittest.TestCase):
         )
         html = compile_maptip_html(cfg)
         self.assertIn('clamp(0.0', html)
+
+    def test_compile_donut_card(self):
+        cfg = TemplateConfig(
+            archetype=Archetype.DONUT_CHART,
+            title_field="district",
+            donut_fields=[("res", "Residential", "#3b82f6"), ("com", "Commercial", "#10b981")],
+        )
+        html = compile_maptip_html(cfg)
+        self.assertIn('data:image/svg+xml;utf8,<svg', html)
+        self.assertIn('"res"', html)
+        self.assertIn('"com"', html)
+        self.assertIn('Residential', html)
+        self.assertIn('Commercial', html)
 
     def test_conditional_badge(self):
         rule = {

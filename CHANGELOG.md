@@ -24,3 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added comprehensive `THIRD_PARTY.md` detailing TKGM MEGSİS daily quotas, fair-use rate limits, legal disclaimers, and terms for Google Maps, OpenStreetMap, and Yandex Maps.
 - Added dedicated Acknowledgments & Special Thanks to `geographyclub` (https://github.com/geographyclub) and `Okan Şafak` (https://github.com/okansafak/qgistkgmplugin) in `README.md`, `THIRD_PARTY.md`, and the plugin About dialog.
 - Fully isolated unit tests and QGIS dual-runtime (3.28+ LTR and QGIS 4.x) test suites.
+
+### Fixed
+- Fixed SVG donut chart single-color rendering glitch: expressions now wrap percentage calculations in `coalesce(..., 0.0)` and `try(to_real(...), 0.0)`, preventing division-by-zero or non-existent attribute lookups from collapsing into invalid `stroke-dasharray=" "` fallback that caused the Qt SVG engine to paint a solid 100% single-color circle.
+- Added dedicated "🍩 Donut Chart Slices" collapsible configuration section in the dock panel with per-slice color picker (`QColorDialog`), layer attribute combo, editable slice labels, and dynamic slice addition/removal.
+- Added smart numeric field auto-discovery (`_auto_detect_donut_fields`) when switching to Donut Chart or loading presets onto custom layers, ensuring proportional multi-color slicing out of the box.

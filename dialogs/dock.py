@@ -7,11 +7,12 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from qgis.PyQt.QtCore import Qt, QTimer, QUrl
+from qgis.PyQt.QtCore import Qt, QTimer, QUrl, QVariant
 from qgis.PyQt.QtGui import QColor, QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QApplication,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDockWidget,
     QFileDialog,
@@ -33,6 +34,10 @@ from qgis.PyQt.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+DEFAULT_DONUT_PALETTE: list[str] = [
+    "#10b981", "#3b82f6", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4", "#f97316", "#14b8a6"
+]
 from qgis.core import (
     QgsCoordinateReferenceSystem,
     QgsCoordinateTransform,
@@ -372,6 +377,42 @@ class QgisMapTipsDock(QDockWidget):
 
         self.section_fields.add_layout(form_fields)
         scroll_layout.addWidget(self.section_fields)
+
+        # 4b. Collapsible: Donut Chart Slices (Dynamic, visible when Donut Chart is active)
+        self.sec_donut = CollapsibleSection("🍩 Donut Chart Slices", initially_expanded=True)
+        donut_layout = QVBoxLayout()
+        donut_layout.setContentsMargins(4, 4, 4, 4)
+        donut_layout.setSpacing(4)
+
+        donut_hint = QLabel("Select 2–6 numeric attributes to slice the proportional donut.")
+        donut_hint.setStyleSheet("font-size: 7.5pt; color: #64748b; margin-bottom: 2px;")
+        donut_layout.addWidget(donut_hint)
+
+        self.donut_slices_container = QVBoxLayout()
+        self.donut_slices_container.setSpacing(3)
+        donut_layout.addLayout(self.donut_slices_container)
+
+        self._donut_slice_rows: list[dict[str, Any]] = []
+
+        donut_btn_row = QHBoxLayout()
+        donut_btn_row.setSpacing(4)
+        self.btn_add_donut_slice = QPushButton("➕ Add Slice")
+        self.btn_add_donut_slice.setObjectName("quietButton")
+        self.btn_add_donut_slice.clicked.connect(self._on_add_donut_slice_clicked)
+
+        self.btn_auto_donut = QPushButton("✨ Auto-Detect Numeric")
+        self.btn_auto_donut.setObjectName("quietButton")
+        self.btn_auto_donut.setToolTip("Scan active layer and auto-populate numeric attributes")
+        self.btn_auto_donut.clicked.connect(self._auto_detect_donut_fields)
+
+        donut_btn_row.addWidget(self.btn_add_donut_slice)
+        donut_btn_row.addWidget(self.btn_auto_donut)
+        donut_btn_row.addStretch()
+        donut_layout.addLayout(donut_btn_row)
+
+        self.sec_donut.add_layout(donut_layout)
+        scroll_layout.addWidget(self.sec_donut)
+        self.sec_donut.setVisible(self.archetype_combo.currentData() == Archetype.DONUT_CHART)
 
         # 5. Collapsible: Advanced Options (Media, Formatting, Rules)
         self.adv_section = CollapsibleSection("⚙️ Advanced Options (Media, Rules, Metrics)", initially_expanded=False)
@@ -1000,6 +1041,13 @@ class QgisMapTipsDock(QDockWidget):
             cb.blockSignals(False)
         self.attrs_list.blockSignals(False)
 
+        self._refresh_donut_combos_from_layer()
+        if self.archetype_combo.currentData() == Archetype.DONUT_CHART:
+            layer_fnames = fields.names()
+            valid_slices = [s for s in self._get_donut_slices_from_ui() if s[0] in layer_fnames]
+            if len(valid_slices) < 2:
+                self._auto_detect_donut_fields()
+
     def _build_config_from_ui(self) -> TemplateConfig:
         config = TemplateConfig()
         config.archetype = self.archetype_combo.currentData()
@@ -1051,10 +1099,13 @@ class QgisMapTipsDock(QDockWidget):
 
         # Donut Chart
         if config.archetype == Archetype.DONUT_CHART:
-            if getattr(self, "_preset_donut_fields", None):
+            ui_slices = self._get_donut_slices_from_ui()
+            if ui_slices:
+                config.donut_fields = ui_slices
+            elif getattr(self, "_preset_donut_fields", None):
                 config.donut_fields = self._preset_donut_fields
             elif attrs:
-                donut_palette = ["#10b981", "#3b82f6", "#f59e0b", "#ec4899", "#8b5cf6", "#06b6d4"]
+                donut_palette = DEFAULT_DONUT_PALETTE
                 config.donut_fields = [
                     (fld, lbl or fld, donut_palette[i % len(donut_palette)])
                     for i, (fld, lbl) in enumerate(attrs[:5])
@@ -1079,11 +1130,205 @@ class QgisMapTipsDock(QDockWidget):
 
     def _on_archetype_changed(self) -> None:
         arch = self.archetype_combo.currentData()
+        if hasattr(self, "sec_donut"):
+            is_donut = (arch == Archetype.DONUT_CHART)
+            self.sec_donut.setVisible(is_donut)
+            if is_donut:
+                self.sec_donut.set_expanded(True)
+                if not self._donut_slice_rows:
+                    self._auto_detect_donut_fields()
         if arch != Archetype.DONUT_CHART:
             self._preset_donut_fields = None
         if arch != Archetype.SPARKLINE:
             self._preset_sparkline_fields = None
         self._update_preview()
+
+    def _refresh_donut_combos_from_layer(self) -> None:
+        if not hasattr(self, "_donut_slice_rows") or not self._current_layer:
+            return
+        fields = self._current_layer.fields()
+        for row in self._donut_slice_rows:
+            combo = row["combo"]
+            curr_val = combo.currentData() or combo.currentText()
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("(None)", "")
+            for f in fields:
+                fn = f.name()
+                is_num = False
+                if hasattr(f, "isNumeric") and f.isNumeric():
+                    is_num = True
+                elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
+                    is_num = True
+                display_name = f"🔢 {fn}" if is_num else fn
+                combo.addItem(display_name, fn)
+            idx = combo.findData(curr_val)
+            if idx >= 0:
+                combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+    def _add_donut_slice(self, field_name: str = "", label: str = "", color: str = "") -> None:
+        if len(self._donut_slice_rows) >= 6:
+            return
+        if not color:
+            color = DEFAULT_DONUT_PALETTE[len(self._donut_slice_rows) % len(DEFAULT_DONUT_PALETTE)]
+
+        row_w = QWidget()
+        h = QHBoxLayout(row_w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(3)
+
+        btn_color = QPushButton()
+        btn_color.setFixedSize(22, 22)
+        btn_color.setStyleSheet(f"background-color: {color}; border: 1px solid #94a3b8; border-radius: 3px;")
+        cursor = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
+        if cursor is not None:
+            btn_color.setCursor(cursor)
+        btn_color.setToolTip("Click to customize slice color")
+
+        combo_fld = QComboBox()
+        combo_fld.addItem("(None)", "")
+        if self._current_layer:
+            for f in self._current_layer.fields():
+                fn = f.name()
+                is_num = False
+                if hasattr(f, "isNumeric") and f.isNumeric():
+                    is_num = True
+                elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
+                    is_num = True
+                combo_fld.addItem(f"🔢 {fn}" if is_num else fn, fn)
+
+        if field_name:
+            idx = combo_fld.findData(field_name)
+            if idx >= 0:
+                combo_fld.setCurrentIndex(idx)
+            else:
+                combo_fld.addItem(field_name, field_name)
+                combo_fld.setCurrentText(field_name)
+
+        clean_label = label or (field_name.replace("_", " ").title() if field_name else "")
+        edit_lbl = QLineEdit(clean_label)
+        edit_lbl.setPlaceholderText("Label")
+        edit_lbl.setMaximumWidth(85)
+
+        btn_del = QPushButton("✕")
+        btn_del.setFixedSize(22, 22)
+        btn_del.setObjectName("quietButton")
+        btn_del.setToolTip("Remove slice")
+
+        h.addWidget(btn_color)
+        h.addWidget(combo_fld, 1)
+        h.addWidget(edit_lbl)
+        h.addWidget(btn_del)
+
+        row_info = {
+            "widget": row_w,
+            "btn_color": btn_color,
+            "combo": combo_fld,
+            "label": edit_lbl,
+            "btn_del": btn_del,
+            "color": color,
+        }
+        self._donut_slice_rows.append(row_info)
+        self.donut_slices_container.addWidget(row_w)
+
+        def on_color_clicked(checked=False, r=row_info):
+            new_color = QColorDialog.getColor(QColor(r["color"]), self, "Select Slice Color")
+            if new_color.isValid():
+                hex_clr = new_color.name()
+                r["color"] = hex_clr
+                r["btn_color"].setStyleSheet(f"background-color: {hex_clr}; border: 1px solid #94a3b8; border-radius: 3px;")
+                self._update_preview()
+
+        def on_combo_changed(idx=0, r=row_info):
+            fn = r["combo"].currentData() or r["combo"].currentText()
+            if fn and fn != "(None)":
+                current_lbl = r["label"].text().strip()
+                if not current_lbl:
+                    r["label"].setText(fn.replace("_", " ").title())
+            self._update_preview()
+
+        def on_del_clicked(checked=False, r=row_info):
+            if r in self._donut_slice_rows:
+                self._donut_slice_rows.remove(r)
+            r["widget"].setParent(None)
+            r["widget"].deleteLater()
+            self._update_preview()
+
+        btn_color.clicked.connect(on_color_clicked)
+        combo_fld.currentIndexChanged.connect(on_combo_changed)
+        edit_lbl.textChanged.connect(self._update_preview)
+        btn_del.clicked.connect(on_del_clicked)
+
+    def _on_add_donut_slice_clicked(self) -> None:
+        selected_fields = {r["combo"].currentData() for r in self._donut_slice_rows}
+        next_field = ""
+        if self._current_layer:
+            for f in self._current_layer.fields():
+                fn = f.name()
+                is_num = False
+                if hasattr(f, "isNumeric") and f.isNumeric():
+                    is_num = True
+                elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
+                    is_num = True
+                if is_num and fn not in selected_fields and fn.lower() not in ("fid", "id", "gid", "objectid"):
+                    next_field = fn
+                    break
+        self._add_donut_slice(field_name=next_field)
+        self._update_preview()
+
+    def _auto_detect_donut_fields(self) -> None:
+        if not self._current_layer:
+            return
+        num_fields = []
+        for f in self._current_layer.fields():
+            fn = f.name()
+            is_num = False
+            if hasattr(f, "isNumeric") and f.isNumeric():
+                is_num = True
+            elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
+                is_num = True
+            if is_num:
+                num_fields.append(fn)
+
+        candidates = [
+            fn for fn in num_fields
+            if fn.lower() not in ("fid", "id", "gid", "objectid", "shape_leng", "shape_area", "st_length", "st_area")
+        ]
+        if len(candidates) < 2 and num_fields:
+            candidates = num_fields
+
+        if not candidates:
+            candidates = [f.name() for f in self._current_layer.fields()][:3]
+
+        if candidates:
+            self._clear_donut_slice_rows()
+            for i, fn in enumerate(candidates[:4]):
+                clr = DEFAULT_DONUT_PALETTE[i % len(DEFAULT_DONUT_PALETTE)]
+                lbl = fn.replace("_", " ").title()
+                self._add_donut_slice(field_name=fn, label=lbl, color=clr)
+            self._update_preview()
+
+    def _clear_donut_slice_rows(self) -> None:
+        for row in getattr(self, "_donut_slice_rows", []):
+            row["widget"].setParent(None)
+            row["widget"].deleteLater()
+        self._donut_slice_rows.clear()
+
+    def _get_donut_slices_from_ui(self) -> list[tuple[str, str, str]]:
+        slices = []
+        for row in getattr(self, "_donut_slice_rows", []):
+            combo = row["combo"]
+            fld = combo.currentData() or combo.currentText()
+            if fld and fld != "(None)":
+                lbl = row["label"].text().strip() or fld
+                slices.append((fld, lbl, row["color"]))
+        return slices
+
+    def _set_donut_slices_in_ui(self, slices: list[tuple[str, str, str]]) -> None:
+        self._clear_donut_slice_rows()
+        for fld, lbl, clr in slices:
+            self._add_donut_slice(field_name=fld, label=lbl, color=clr)
 
     def _nav_prev_feature(self) -> None:
         if getattr(self, "_sample_features", []):
@@ -1572,8 +1817,17 @@ class QgisMapTipsDock(QDockWidget):
         # Retain preset donut and sparkline fields
         if hasattr(cfg, "donut_fields") and cfg.donut_fields:
             self._preset_donut_fields = cfg.donut_fields
+            layer_fnames = self._current_layer.fields().names() if self._current_layer else []
+            matches_layer = any(fld in layer_fnames for fld, _, _ in cfg.donut_fields)
+            if matches_layer or not self._current_layer:
+                self._set_donut_slices_in_ui(cfg.donut_fields)
+            else:
+                self._auto_detect_donut_fields()
+                if not self._donut_slice_rows:
+                    self._set_donut_slices_in_ui(cfg.donut_fields)
         else:
             self._preset_donut_fields = None
+            self._clear_donut_slice_rows()
 
         if hasattr(cfg, "sparkline_fields") and cfg.sparkline_fields:
             self._preset_sparkline_fields = cfg.sparkline_fields
