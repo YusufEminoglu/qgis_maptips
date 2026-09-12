@@ -30,6 +30,8 @@ from qgis.PyQt.QtWidgets import (
     QScrollArea,
     QSpinBox,
     QTabWidget,
+    QTableWidget,
+    QTableWidgetItem,
     QTextBrowser,
     QVBoxLayout,
     QWidget,
@@ -60,7 +62,7 @@ from ..core.action_builder import (
     get_layer_actions,
     remove_all_actions,
 )
-from ..core.raster_hud import CanvasHoverHUD
+from ..core.raster_hud import CanvasHoverHUD, evaluate_vector_feature_maptip
 from ..core.template_engine import (
     PALETTES,
     Archetype,
@@ -116,6 +118,12 @@ class QgisMapTipsDock(QDockWidget):
 
         self._init_ui()
         apply_adaptive_theme(self)
+
+        # Connect interactive inspector HUD signals
+        self._hud.featureHovered.connect(self._on_hud_feature_hovered)
+        self._hud.featurePinned.connect(self._on_hud_feature_pinned)
+        self._hud.pinStateChanged.connect(self._on_hud_pin_state_changed)
+        self._hud.cleared.connect(self._on_hud_cleared)
 
         # Sync and connect native MapTips action
         self._sync_maptip_action_state()
@@ -267,10 +275,10 @@ class QgisMapTipsDock(QDockWidget):
         self._build_actions_tab(tab_actions)
         self.tabs.addTab(tab_actions, "Actions Hub")
 
-        # Tab 3: Canvas Hover HUD
+        # Tab 3: Interactive Canvas Pin & Inspect
         tab_hud = QWidget()
         self._build_hud_tab(tab_hud)
-        self.tabs.addTab(tab_hud, "Live Canvas HUD")
+        self.tabs.addTab(tab_hud, "📌 Pin & Inspect")
 
         self.tabs.currentChanged.connect(lambda _: self._sync_cursor_state())
         main_layout.addWidget(self.tabs, 1)
@@ -839,48 +847,46 @@ class QgisMapTipsDock(QDockWidget):
         scroll_content = QWidget()
         layout = QVBoxLayout(scroll_content)
         layout.setContentsMargins(6, 6, 6, 6)
-        layout.setSpacing(5)
+        layout.setSpacing(6)
 
-        # 1. Collapsible: HUD Inspection Controls
-        self.sec_hud_ctrl = CollapsibleSection("🎯 Live Canvas HUD Controls", initially_expanded=True)
+        # 1. Collapsible: Inspector & Pin Controls
+        self.sec_hud_ctrl = CollapsibleSection("🎯 Canvas MapTip Inspector & Pin", initially_expanded=True)
         form_hud = QFormLayout()
         form_hud.setContentsMargins(4, 4, 4, 4)
         form_hud.setSpacing(4)
 
         hud_switch_row = QHBoxLayout()
-        hud_switch_lbl = QLabel("Live Canvas HUD Active:")
+        hud_switch_lbl = QLabel("Interactive Inspector Active:")
         hud_switch_lbl.setStyleSheet("font-weight: bold; font-size: 8.5pt;")
         self.hud_switch = IOSToggleSwitch(default_on=False, width=46, height=22)
-        self.hud_switch.setToolTip("Activate real-time raster & vector HUD inspection on canvas hover")
+        self.hud_switch.setToolTip("Activate real-time canvas feature inspection & 1-click pinning")
         self.hud_switch.toggled.connect(self._toggle_hud)
         hud_switch_row.addWidget(hud_switch_lbl)
         hud_switch_row.addStretch()
         hud_switch_row.addWidget(self.hud_switch)
         form_hud.addRow(hud_switch_row)
 
-        self.hud_cursor_cb = QCheckBox("Precision Reticle Cursor on Canvas")
-        self.hud_cursor_cb.setChecked(True)
-        self.hud_cursor_cb.setToolTip("Replaces the default hand cursor with an inspection crosshair & locator badge")
-        self.hud_cursor_cb.toggled.connect(lambda c: self._hud.set_use_custom_cursor(c))
-        form_hud.addRow("", self.hud_cursor_cb)
-
-        self.hud_pin_cb = QCheckBox("📌 Pin / Freeze Tooltip (Shift+Click canvas)")
-        self.hud_pin_cb.setToolTip("Freezes current tooltip stationary on canvas so it will not close or move")
-        self.hud_pin_cb.toggled.connect(lambda c: self._hud.set_pinned(c))
-        self._hud.pinStateChanged.connect(self.hud_pin_cb.setChecked)
+        self.hud_pin_cb = QCheckBox("📌 Click Canvas to PIN / Freeze Card")
+        self.hud_pin_cb.setChecked(True)
+        self.hud_pin_cb.setToolTip("Click any feature on canvas to freeze its card in place so buttons can be clicked")
+        self.hud_pin_cb.toggled.connect(lambda c: self._hud.set_click_to_pin(c))
         form_hud.addRow("", self.hud_pin_cb)
 
-        self.hud_composite_cb = QCheckBox("Composite Mode (All Rasters + Top Vector)")
-        self.hud_composite_cb.toggled.connect(self._on_hud_composite_toggled)
-        form_hud.addRow("", self.hud_composite_cb)
+        self.hud_highlight_cb = QCheckBox("✨ Glowing Feature Highlight on Canvas")
+        self.hud_highlight_cb.setChecked(True)
+        self.hud_highlight_cb.setToolTip("Draws an outline on the canvas around the inspected feature (Cyan=hover, Gold=pinned)")
+        self.hud_highlight_cb.toggled.connect(lambda c: self._hud.set_highlight_enabled(c))
+        form_hud.addRow("", self.hud_highlight_cb)
 
-        self.hud_raster_combo = QComboBox()
-        self.hud_raster_combo.currentIndexChanged.connect(self._on_hud_raster_changed)
-        form_hud.addRow("Primary Raster:", self.hud_raster_combo)
+        self.hud_cursor_cb = QCheckBox("🎯 High-Visibility Reticle Cursor")
+        self.hud_cursor_cb.setChecked(False)
+        self.hud_cursor_cb.setToolTip("Replaces standard pointer with inspection crosshairs on canvas")
+        self.hud_cursor_cb.toggled.connect(self._on_hud_cursor_toggled)
+        form_hud.addRow("", self.hud_cursor_cb)
 
         self.hud_debounce_spin = QSpinBox()
         self.hud_debounce_spin.setRange(100, 1000)
-        self.hud_debounce_spin.setValue(250)
+        self.hud_debounce_spin.setValue(200)
         self.hud_debounce_spin.setSuffix(" ms")
         self.hud_debounce_spin.valueChanged.connect(self._on_hud_debounce_changed)
         form_hud.addRow("Dwell Debounce:", self.hud_debounce_spin)
@@ -888,26 +894,90 @@ class QgisMapTipsDock(QDockWidget):
         self.sec_hud_ctrl.add_layout(form_hud)
         layout.addWidget(self.sec_hud_ctrl)
 
-        # 2. Collapsible: Live Sampled Values Feed
-        self.sec_hud_feed = CollapsibleSection("📊 Live Sampled Values Feed", initially_expanded=True)
-        feed_layout = QVBoxLayout()
-        feed_layout.setContentsMargins(4, 4, 4, 4)
-        feed_layout.setSpacing(4)
+        # 2. Collapsible: Inspected / Pinned Feature Hub
+        self.sec_hud_feed = CollapsibleSection("📌 Inspected / Pinned Feature Hub", initially_expanded=True)
+        hub_layout = QVBoxLayout()
+        hub_layout.setContentsMargins(4, 4, 4, 4)
+        hub_layout.setSpacing(5)
+
+        self.hud_status_badge = QLabel("⚪ Standby — Hover over map or click any feature to pin")
+        self.hud_status_badge.setStyleSheet(
+            "background-color: #1e293b; color: #94a3b8; font-size: 8pt; font-weight: bold; "
+            "padding: 5px 8px; border-radius: 4px; border: 1px solid #334155;"
+        )
+        hub_layout.addWidget(self.hud_status_badge)
+
+        # Action Buttons Row
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(4)
+
+        self.btn_hud_pin = QPushButton("📌 Pin Card")
+        self.btn_hud_pin.setToolTip("Toggle pin/freeze of the current card on canvas")
+        self.btn_hud_pin.setStyleSheet("font-size: 8pt; font-weight: bold; padding: 4px 6px;")
+        self.btn_hud_pin.clicked.connect(self._on_hud_toggle_pin)
+        actions_row.addWidget(self.btn_hud_pin)
+
+        self.btn_hud_zoom = QPushButton("🔍 Zoom")
+        self.btn_hud_zoom.setToolTip("Zoom canvas directly to this inspected feature")
+        self.btn_hud_zoom.setStyleSheet("font-size: 8pt; padding: 4px 6px;")
+        self.btn_hud_zoom.clicked.connect(self._on_hud_zoom_feature)
+        actions_row.addWidget(self.btn_hud_zoom)
+
+        self.btn_hud_copy = QPushButton("📋 Copy")
+        self.btn_hud_copy.setToolTip("Copy all attributes of this feature to clipboard")
+        self.btn_hud_copy.setStyleSheet("font-size: 8pt; padding: 4px 6px;")
+        self.btn_hud_copy.clicked.connect(self._on_hud_copy_feature)
+        actions_row.addWidget(self.btn_hud_copy)
+
+        self.btn_hud_export = QPushButton("📄 Report")
+        self.btn_hud_export.setToolTip("Export feature card report as HTML and open in browser")
+        self.btn_hud_export.setStyleSheet("font-size: 8pt; padding: 4px 6px;")
+        self.btn_hud_export.clicked.connect(self._on_hud_export_feature)
+        actions_row.addWidget(self.btn_hud_export)
+
+        hub_layout.addLayout(actions_row)
+
         self.hud_live_browser = QTextBrowser()
-        self.hud_live_browser.setMinimumHeight(100)
-        self.hud_live_browser.setMaximumHeight(180)
+        self.hud_live_browser.setMinimumHeight(160)
+        self.hud_live_browser.setMaximumHeight(300)
         self.hud_live_browser.setStyleSheet(
-            "background-color: #0f172a; color: #f8fafc; border-radius: 4px; border: 1px solid #334155; font-size: 8pt;"
+            "background-color: #0f172a; color: #f8fafc; border-radius: 6px; border: 1px solid #334155; font-size: 8pt;"
         )
         self.hud_live_browser.setHtml(
-            "<div style='color:#64748b; font-size:8pt; padding:8px;'>"
-            "Hover over the map canvas to inspect raster bands and vector features. "
-            "Values remain permanently visible here even after moving the mouse away.</div>"
+            "<div style='color:#64748b; font-size:8pt; padding:12px; text-align:center;'>"
+            "Hover over any feature on the map canvas to inspect its MapTip card in real time.<br><br>"
+            "<b>Click</b> on the feature to <b>PIN</b> it in place so you can click links or examine adjacent layers."
+            "</div>"
         )
-        feed_layout.addWidget(self.hud_live_browser)
-        self._hud.sampleUpdated.connect(lambda html_val, _: self.hud_live_browser.setHtml(html_val))
-        self.sec_hud_feed.add_layout(feed_layout)
+        hub_layout.addWidget(self.hud_live_browser)
+        self.sec_hud_feed.add_layout(hub_layout)
         layout.addWidget(self.sec_hud_feed)
+
+        # 3. Collapsible: Attributes Breakdown
+        self.sec_hud_attrs = CollapsibleSection("📋 Feature Attributes Breakdown", initially_expanded=False)
+        attr_layout = QVBoxLayout()
+        attr_layout.setContentsMargins(4, 4, 4, 4)
+        attr_layout.setSpacing(4)
+
+        self.hud_attr_table = QTableWidget()
+        self.hud_attr_table.setColumnCount(2)
+        self.hud_attr_table.setHorizontalHeaderLabels(["Field", "Value"])
+        self.hud_attr_table.horizontalHeader().setStretchLastSection(True)
+        self.hud_attr_table.verticalHeader().setVisible(False)
+        edit_triggers = getattr(QTableWidget.EditTrigger, "NoEditTriggers", None)
+        if edit_triggers is None:
+            edit_triggers = getattr(QTableWidget, "NoEditTriggers", None)
+        if edit_triggers is not None:
+            self.hud_attr_table.setEditTriggers(edit_triggers)
+        self.hud_attr_table.setMinimumHeight(120)
+        self.hud_attr_table.setMaximumHeight(220)
+        self.hud_attr_table.setStyleSheet(
+            "QTableWidget { background-color: #0f172a; color: #cbd5e1; gridline-color: #1e293b; font-size: 8pt; border: 1px solid #334155; border-radius: 4px; } "
+            "QHeaderView::section { background-color: #1e293b; color: #38bdf8; font-weight: bold; font-size: 8pt; padding: 2px 4px; border: none; }"
+        )
+        attr_layout.addWidget(self.hud_attr_table)
+        self.sec_hud_attrs.add_layout(attr_layout)
+        layout.addWidget(self.sec_hud_attrs)
 
         layout.addStretch()
         scroll.setWidget(scroll_content)
@@ -920,12 +990,10 @@ class QgisMapTipsDock(QDockWidget):
     def _refresh_layers(self) -> None:
         prev_id = self.layer_combo.currentData()
         self.layer_combo.blockSignals(True)
-        self.hud_raster_combo.blockSignals(True)
         self.rel_layer_combo.blockSignals(True)
         self.sel_layer_combo.blockSignals(True)
 
         self.layer_combo.clear()
-        self.hud_raster_combo.clear()
         self.rel_layer_combo.clear()
         self.sel_layer_combo.clear()
 
@@ -936,11 +1004,8 @@ class QgisMapTipsDock(QDockWidget):
             if isinstance(lyr, QgsVectorLayer):
                 self.rel_layer_combo.addItem(lyr.name(), lyr.name())
                 self.sel_layer_combo.addItem(lyr.name(), lyr.name())
-            elif isinstance(lyr, QgsRasterLayer):
-                self.hud_raster_combo.addItem(f"▦ {lyr.name()}", lyr.id())
 
         self.layer_combo.blockSignals(False)
-        self.hud_raster_combo.blockSignals(False)
         self.rel_layer_combo.blockSignals(False)
         self.sel_layer_combo.blockSignals(False)
 
@@ -1948,34 +2013,154 @@ class QgisMapTipsDock(QDockWidget):
 
     def _toggle_hud(self, checked: bool) -> None:
         self._hud.set_hud_mode(checked)
+        if not checked:
+            self.hud_status_badge.setText("⚪ Inactive — Toggle switch to enable Canvas Inspector")
+            self.hud_status_badge.setStyleSheet(
+                "background-color: #1e293b; color: #64748b; font-size: 8pt; font-weight: bold; "
+                "padding: 5px 8px; border-radius: 4px; border: 1px solid #334155;"
+            )
+        else:
+            self.hud_status_badge.setText("⚪ Standby — Hover over map or click any feature to pin")
+            self.hud_status_badge.setStyleSheet(
+                "background-color: #1e293b; color: #94a3b8; font-size: 8pt; font-weight: bold; "
+                "padding: 5px 8px; border-radius: 4px; border: 1px solid #334155;"
+            )
         self._sync_cursor_state()
 
     def _sync_cursor_state(self) -> None:
-        """Keep the canvas inspection reticle cursor active whenever MapTips or HUD is active."""
-        maptips_on = hasattr(self, "maptips_switch") and self.maptips_switch.isChecked()
-        hud_on = hasattr(self, "hud_switch") and self.hud_switch.isChecked()
-        current_tab = self.tabs.currentIndex() if hasattr(self, "tabs") else 0
-
-        # Enable reticle cursor if HUD is on, or if user is on MapTip Designer / HUD tab while MapTips is active
-        want_cursor = hud_on or (maptips_on and current_tab in (0, 2))
+        """Only set reticle cursor if user explicitly enabled custom cursor checkbox."""
+        want_cursor = bool(
+            hasattr(self, "hud_cursor_cb")
+            and self.hud_cursor_cb.isChecked()
+            and hasattr(self, "hud_switch")
+            and self.hud_switch.isChecked()
+        )
         self._hud.set_cursor_mode(want_cursor)
 
-    def _on_hud_composite_toggled(self, checked: bool) -> None:
-        self._hud.set_composite_mode(checked)
-        if checked:
-            rasters = [lyr for lyr in QgsProject.instance().mapLayers().values() if isinstance(lyr, QgsRasterLayer)]
-            self._hud.set_target_rasters(rasters)
-        else:
-            self._on_hud_raster_changed(self.hud_raster_combo.currentIndex())
-
-    def _on_hud_raster_changed(self, index: int) -> None:
-        lyr_id = self.hud_raster_combo.currentData()
-        layer = QgsProject.instance().mapLayer(lyr_id)
-        if isinstance(layer, QgsRasterLayer):
-            self._hud.set_active_raster(layer)
+    def _on_hud_cursor_toggled(self, checked: bool) -> None:
+        self._hud.set_use_custom_cursor(checked)
+        self._sync_cursor_state()
 
     def _on_hud_debounce_changed(self, val: int) -> None:
         self._hud.debounce_ms = val
+
+    def _on_hud_feature_hovered(self, layer: Any, feat: Any, html_val: str) -> None:
+        if not self._hud.is_pinned():
+            layer_name = layer.name() if hasattr(layer, "name") else "Layer"
+            fid = feat.id() if hasattr(feat, "id") else "?"
+            self.hud_status_badge.setText(f"🟡 Hovering: {layer_name} (ID {fid})")
+            self.hud_status_badge.setStyleSheet(
+                "background-color: #1e293b; color: #38bdf8; font-size: 8pt; font-weight: bold; "
+                "padding: 5px 8px; border-radius: 4px; border: 1px solid #0284c7;"
+            )
+            self.hud_live_browser.setHtml(html_val)
+            self._populate_hud_attributes_table(layer, feat)
+
+    def _on_hud_feature_pinned(self, layer: Any, feat: Any, html_val: str) -> None:
+        layer_name = layer.name() if hasattr(layer, "name") else "Layer"
+        fid = feat.id() if hasattr(feat, "id") else "?"
+        self.hud_status_badge.setText(f"🟢 PINNED: {layer_name} (ID {fid})")
+        self.hud_status_badge.setStyleSheet(
+            "background-color: #1e293b; color: #f59e0b; font-size: 8pt; font-weight: bold; "
+            "padding: 5px 8px; border-radius: 4px; border: 1px solid #f59e0b;"
+        )
+        self.btn_hud_pin.setText("✕ Unpin Card")
+        self.hud_live_browser.setHtml(html_val)
+        self._populate_hud_attributes_table(layer, feat)
+
+    def _on_hud_pin_state_changed(self, pinned: bool) -> None:
+        self.btn_hud_pin.setText("✕ Unpin Card" if pinned else "📌 Pin Card")
+        if not pinned:
+            self.hud_status_badge.setText("⚪ Standby — Hover over map or click any feature to pin")
+            self.hud_status_badge.setStyleSheet(
+                "background-color: #1e293b; color: #94a3b8; font-size: 8pt; font-weight: bold; "
+                "padding: 5px 8px; border-radius: 4px; border: 1px solid #334155;"
+            )
+
+    def _on_hud_cleared(self) -> None:
+        if not self._hud.is_pinned():
+            self.hud_status_badge.setText("⚪ Standby — Hover over map or click any feature to pin")
+            self.hud_status_badge.setStyleSheet(
+                "background-color: #1e293b; color: #94a3b8; font-size: 8pt; font-weight: bold; "
+                "padding: 5px 8px; border-radius: 4px; border: 1px solid #334155;"
+            )
+
+    def _on_hud_toggle_pin(self) -> None:
+        self._hud.set_pinned(not self._hud.is_pinned())
+
+    def _populate_hud_attributes_table(self, layer: Any, feat: Any) -> None:
+        if not hasattr(layer, "fields") or not hasattr(feat, "attribute"):
+            return
+        fields = layer.fields()
+        self.hud_attr_table.setRowCount(len(fields))
+        for row, fld in enumerate(fields):
+            val = feat.attribute(fld.name())
+            val_str = "NULL" if val is None else str(val)
+            item_k = QTableWidgetItem(fld.name())
+            item_v = QTableWidgetItem(val_str)
+            no_edit = getattr(Qt.ItemFlag, "ItemIsEditable", None)
+            if no_edit is None:
+                no_edit = getattr(Qt, "ItemIsEditable", 0)
+            item_k.setFlags(item_k.flags() & ~no_edit)
+            item_v.setFlags(item_v.flags() & ~no_edit)
+            self.hud_attr_table.setItem(row, 0, item_k)
+            self.hud_attr_table.setItem(row, 1, item_v)
+
+    def _on_hud_zoom_feature(self) -> None:
+        feat = getattr(self._hud, "_current_feature", None)
+        layer = getattr(self._hud, "_current_layer", None)
+        if not feat or not layer or not feat.hasGeometry():
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushInfo("Qgis MapTips", "No feature currently inspected to zoom to.")
+            return
+        box = feat.geometry().boundingBox()
+        canvas = self.iface.mapCanvas()
+        canvas_crs = canvas.mapSettings().destinationCrs()
+        if layer.crs() != canvas_crs:
+            tr = QgsCoordinateTransform(layer.crs(), canvas_crs, QgsProject.instance())
+            box = tr.transformBoundingBox(box)
+        pad = max(20.0, max(box.width(), box.height()) * 0.2)
+        canvas.setExtent(box.buffered(pad))
+        canvas.refresh()
+
+    def _on_hud_copy_feature(self) -> None:
+        feat = getattr(self._hud, "_current_feature", None)
+        layer = getattr(self._hud, "_current_layer", None)
+        if not feat or not layer:
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushWarning("Qgis MapTips", "No feature currently inspected to copy.")
+            return
+        lines = [f"{field.name()}: {feat[field.name()]}" for field in layer.fields()]
+        QApplication.clipboard().setText("\n".join(lines))
+        if hasattr(self.iface, "messageBar"):
+            self.iface.messageBar().pushSuccess("Qgis MapTips", f"Copied {len(lines)} attributes to clipboard.")
+
+    def _on_hud_export_feature(self) -> None:
+        feat = getattr(self._hud, "_current_feature", None)
+        layer = getattr(self._hud, "_current_layer", None)
+        if not feat or not layer:
+            if hasattr(self.iface, "messageBar"):
+                self.iface.messageBar().pushWarning("Qgis MapTips", "No feature currently inspected to export.")
+            return
+        import os, tempfile
+        raw_html = layer.mapTipTemplate() or evaluate_vector_feature_maptip(layer, feat)
+        ctx = QgsExpressionContext()
+        ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+        ctx.setFeature(feat)
+        evaluated = QgsExpression.replaceExpressionText(raw_html, ctx)
+        full_html = (
+            '<!DOCTYPE html><html><head><meta charset="utf-8"><title>Feature Card Report</title>'
+            '<style>body{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;padding:30px;background:#f8fafc;display:flex;justify-content:center;}'
+            '.card-wrap{box-shadow:0 10px 25px rgba(0,0,0,0.1);background:#fff;border-radius:6px;overflow:hidden;}'
+            '</style></head><body><div class="card-wrap">' + evaluated + '</div></body></html>'
+        )
+        fid = feat.id() if hasattr(feat, "id") else 1
+        tmp = os.path.join(tempfile.gettempdir(), f"feature_card_{fid}.html")
+        with open(tmp, "w", encoding="utf-8") as fp:
+            fp.write(full_html)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(tmp))
+        if hasattr(self.iface, "messageBar"):
+            self.iface.messageBar().pushSuccess("Qgis MapTips", "Opened feature card report in browser.")
 
     def _open_quick_manual(self) -> None:
         from .quick_manual import QuickManualDialog

@@ -1,20 +1,30 @@
-"""Live Canvas Hover HUD for raster and composite multi-layer inspection.
+"""Interactive Canvas MapTip Inspector & Pin Engine.
 
-Installs a passive event filter on the QGIS map canvas viewport with debounced
-sampling, a custom high-visibility inspection reticle cursor, persistent dwelling,
-and freeze/pinning capability to prevent main-thread GUI freezing or tooltip flickering.
+Provides an interactive passive event filter on the QGIS map canvas viewport:
+1. Real-time vector feature inspection on hover with instant MapTip card rendering.
+2. Canvas feature glow highlighting (QgsHighlight) with cyan hover / gold pin styling.
+3. 1-Click / Shift+Click Pin & Freeze mode: locks the MapTip stationary on canvas
+   so users can read, select text, click action links, and compare features without
+   the tooltip vanishing on mouse movement.
+4. Smooth dismissal with Escape key or clicking blank canvas.
+5. High-visibility optional inspection reticle cursor.
+6. Seamless fallback to raster cell sampling when hovering raster layers.
 """
 from __future__ import annotations
 
 import contextlib
 import html
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Any, Optional
 
 from qgis.PyQt.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, pyqtSignal
 from qgis.PyQt.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
 from qgis.PyQt.QtWidgets import QToolTip
 from qgis.core import (
     QgsCoordinateTransform,
+    QgsExpression,
+    QgsExpressionContext,
+    QgsExpressionContextUtils,
+    QgsFeature,
     QgsFeatureRequest,
     QgsGeometry,
     QgsPointXY,
@@ -22,13 +32,14 @@ from qgis.core import (
     QgsRasterLayer,
     QgsVectorLayer,
 )
+from qgis.gui import QgsHighlight
 
 if TYPE_CHECKING:
     from qgis.gui import QgsMapCanvas
 
 
 def create_inspection_cursor() -> QCursor:
-    """Creates a custom, high-visibility 32x32 inspection reticle with mini tooltip badge."""
+    """Create a custom, high-visibility 32x32 inspection reticle with mini tooltip badge."""
     pix = QPixmap(32, 32)
     pix.fill(Qt.GlobalColor.transparent if hasattr(Qt, "GlobalColor") else Qt.transparent)
 
@@ -75,22 +86,68 @@ def create_inspection_cursor() -> QCursor:
     return QCursor(pix, cx, cy)
 
 
-class CanvasHoverHUD(QObject):
-    """Passive event filter monitoring canvas mouse moves with debouncing and unique cursor."""
+def evaluate_vector_feature_maptip(layer: QgsVectorLayer, feat: QgsFeature) -> str:
+    """Evaluate feature MapTip template or return clean fallback card HTML."""
+    if not layer or not layer.isValid() or not feat or not feat.isValid():
+        return ""
 
-    # Emitted on each successful sample: (html_table, summary_status)
-    sampleUpdated = pyqtSignal(str, str)
+    template = layer.mapTipTemplate()
+    if template and template.strip():
+        with contextlib.suppress(Exception):
+            ctx = QgsExpressionContext()
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+            ctx.setFeature(feat)
+            rendered = QgsExpression.replaceExpressionText(template, ctx)
+            if rendered and rendered.strip():
+                return rendered
+
+    # Clean fallback card showing primary attributes
+    fields = layer.fields()
+    title_val = str(feat.attribute(0) or f"Feature #{feat.id()}")
+    rows = []
+    for i, fld in enumerate(fields):
+        if i >= 6:
+            break
+        val = feat.attribute(fld.name())
+        val_str = "NULL" if val is None else str(val)
+        rows.append(
+            f'<tr><td style="color:#94a3b8; font-size:9.5px; padding:2px 6px; border-bottom:1px solid #1e293b;">{html.escape(fld.name())}</td>'
+            f'<td style="color:#f8fafc; font-size:9.5px; font-weight:bold; padding:2px 6px; border-bottom:1px solid #1e293b; text-align:right;">{html.escape(val_str)}</td></tr>'
+        )
+
+    return (
+        '<table width="280" cellspacing="0" cellpadding="0" '
+        'style="font-family:Segoe UI, sans-serif; background-color:#0f172a; border:1.5px solid #0284c7; '
+        'border-collapse:collapse; border-radius:6px; overflow:hidden;">'
+        f'<tr><td colspan="2" bgcolor="#0284c7" style="color:#ffffff; font-size:11px; font-weight:bold; padding:5px 8px;">'
+        f'&#128506; {html.escape(layer.name())}</td></tr>'
+        f'<tr><td colspan="2" bgcolor="#1e293b" style="color:#38bdf8; font-size:10px; font-weight:bold; padding:4px 8px;">'
+        f'{html.escape(title_val)}</td></tr>'
+        f'{"".join(rows)}'
+        '</table>'
+    )
+
+
+class CanvasHoverHUD(QObject):
+    """Interactive Canvas MapTip Inspector & Pinning Engine with vector highlight."""
+
+    # Signals
+    featureHovered = pyqtSignal(object, object, str)  # (QgsVectorLayer, QgsFeature, html)
+    featurePinned = pyqtSignal(object, object, str)   # (QgsVectorLayer, QgsFeature, html)
+    cleared = pyqtSignal()
     pinStateChanged = pyqtSignal(bool)
+    sampleUpdated = pyqtSignal(str, str)              # (html, summary_status)
 
     def __init__(
         self,
         canvas: "QgsMapCanvas",
-        debounce_ms: int = 250,
+        debounce_ms: int = 200,
         parent: Optional[QObject] = None,
     ) -> None:
         super().__init__(parent or canvas)
         self.canvas = canvas
         self.debounce_ms = debounce_ms
+
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._on_debounce_timeout)
@@ -99,21 +156,30 @@ class CanvasHoverHUD(QObject):
         self._last_global_pos = QPoint()
         self._pinned_global_pos = QPoint()
         self._pinned_screen_pos = QPoint()
-        self._active_raster_layers: list[QgsRasterLayer] = []
+
         self._active_vector_layer: Optional[QgsVectorLayer] = None
+        self._active_raster_layers: list[QgsRasterLayer] = []
         self._composite_mode = False
-        self._filter_installed = False
+
         self._hud_enabled = False
         self._cursor_enabled = False
+        self._use_custom_cursor = False  # Keep standard cursor by default
+        self._filter_installed = False
         self._pinned = False
-        self._use_custom_cursor = True
+        self._highlight_enabled = True
+        self._click_to_pin = True
+
+        self._current_feature: Optional[QgsFeature] = None
+        self._current_layer: Optional[QgsVectorLayer] = None
+        self._last_sampled_html = ""
+
+        self._highlight: Optional[QgsHighlight] = None
         self._inspection_cursor: Optional[QCursor] = None
         with contextlib.suppress(Exception):
             self._inspection_cursor = create_inspection_cursor()
-        self._last_sampled_html = ""
 
     def _sync_canvas_event_filter(self) -> None:
-        """Dynamically attach or detach canvas viewport event filter based on active flags."""
+        """Attach or detach viewport event filter based on inspector state."""
         vp = self.canvas.viewport() if self.canvas else None
         if not vp:
             return
@@ -129,173 +195,229 @@ class CanvasHoverHUD(QObject):
 
         if self._cursor_enabled and self._use_custom_cursor and self._inspection_cursor:
             vp.setCursor(self._inspection_cursor)
-        elif not self._cursor_enabled:
+        elif not self._cursor_enabled or not self._use_custom_cursor:
             with contextlib.suppress(Exception):
                 vp.unsetCursor()
 
     def set_cursor_mode(self, enabled: bool) -> None:
-        """Toggle unique inspection reticle cursor on canvas."""
+        """Toggle unique inspection reticle cursor."""
         self._cursor_enabled = enabled
         self._sync_canvas_event_filter()
 
+    def set_use_custom_cursor(self, enabled: bool) -> None:
+        """Toggle preference for high-visibility reticle cursor."""
+        self._use_custom_cursor = enabled
+        self._sync_canvas_event_filter()
+
     def set_hud_mode(self, enabled: bool) -> None:
-        """Toggle live HUD inspection sampling and hover tooltips."""
+        """Activate or deactivate interactive canvas MapTip inspector."""
         self._hud_enabled = enabled
         if not enabled:
             self._timer.stop()
-            if not self._pinned:
-                QToolTip.hideText()
+            self.set_pinned(False)
+            self._clear_highlight()
+            QToolTip.hideText()
         self._sync_canvas_event_filter()
 
+    def set_highlight_enabled(self, enabled: bool) -> None:
+        """Toggle canvas feature glowing highlight."""
+        self._highlight_enabled = enabled
+        if not enabled:
+            self._clear_highlight()
+
+    def set_click_to_pin(self, enabled: bool) -> None:
+        """Toggle whether left clicking on canvas pins the inspected card."""
+        self._click_to_pin = enabled
+
+    def set_active_vector(self, layer: Optional[QgsVectorLayer]) -> None:
+        """Set primary target vector layer for feature inspection."""
+        self._active_vector_layer = layer if (layer and layer.isValid()) else None
+        if not self._pinned:
+            self._clear_highlight()
+
     def set_active_raster(self, layer: Optional[QgsRasterLayer]) -> None:
-        """Set a single target raster layer."""
+        """Set fallback raster layer."""
         self._active_raster_layers = [layer] if (layer and layer.isValid()) else []
 
     def set_target_rasters(self, layers: list[QgsRasterLayer]) -> None:
-        """Set multiple raster layers for composite multi-raster inspection."""
         self._active_raster_layers = [lyr for lyr in layers if lyr and lyr.isValid()]
 
     def set_vector_layer(self, layer: Optional[QgsVectorLayer]) -> None:
-        """Set optional vector layer for composite vector+raster drilldown."""
-        self._active_vector_layer = layer if (layer and layer.isValid()) else None
+        self.set_active_vector(layer)
 
     def set_composite_mode(self, enabled: bool) -> None:
         self._composite_mode = enabled
 
-    def set_use_custom_cursor(self, enabled: bool) -> None:
-        """Toggle unique inspection cursor preference."""
-        self._use_custom_cursor = enabled
-        self._sync_canvas_event_filter()
-
-    def set_pinned(self, pinned: bool) -> None:
-        """Pin/freeze current tooltip so it remains stationary on canvas."""
-        self._pinned = pinned
-        if pinned:
-            # Lock position to currently hovered position
-            self._pinned_global_pos = self._last_global_pos
-            self._pinned_screen_pos = self._last_screen_pos
-        self.pinStateChanged.emit(pinned)
-        if self._hud_enabled:
-            if self._last_sampled_html:
-                self._display_hud(self._last_sampled_html)
-            elif pinned:
-                standby_html = (
-                    '<table width="260" cellspacing="0" cellpadding="0" '
-                    'style="font-family:Segoe UI, sans-serif; background-color:#0f172a; '
-                    'border:1.5px solid #f59e0b; border-collapse:collapse; border-radius:6px;">'
-                    '<tr><td bgcolor="#f59e0b" style="color:#0f172a; font-size:11px; font-weight:bold; padding:5px 8px;">'
-                    '&#128204; HUD Pinned (Ready)</td></tr>'
-                    '<tr><td style="color:#cbd5e1; font-size:9.5px; padding:8px;">'
-                    'Live HUD is locked. Shift+Click the canvas or uncheck to unlock.</td></tr>'
-                    '</table>'
-                )
-                self._display_hud(standby_html)
+    def is_active(self) -> bool:
+        return self._hud_enabled
 
     def is_pinned(self) -> bool:
         return self._pinned
 
     def start(self) -> None:
-        """Activate both HUD hover sampling and inspection cursor."""
         self.set_hud_mode(True)
-        self.set_cursor_mode(True)
 
     def stop(self) -> None:
-        """Deactivate HUD hover sampling, restore cursor, and clear tooltips."""
         self.set_hud_mode(False)
         self.set_cursor_mode(False)
         self._pinned = False
+        self._clear_highlight()
         self.pinStateChanged.emit(False)
         QToolTip.hideText()
 
-    def is_active(self) -> bool:
-        return self._hud_enabled
+    def _update_highlight(self, geom: QgsGeometry, layer: QgsVectorLayer, pinned: bool = False) -> None:
+        """Render glowing boundary outline on canvas around the inspected feature."""
+        if not self._highlight_enabled or not self.canvas or not geom or not layer:
+            self._clear_highlight()
+            return
+
+        with contextlib.suppress(Exception):
+            if self._highlight:
+                self._highlight.hide()
+                self._highlight = None
+
+            self._highlight = QgsHighlight(self.canvas, geom, layer)
+            if pinned:
+                # Golden amber glow when pinned
+                self._highlight.setColor(QColor(245, 158, 11, 230))
+                self._highlight.setFillColor(QColor(245, 158, 11, 45))
+                self._highlight.setWidth(3.0)
+            else:
+                # Electric cyan glow when hovering
+                self._highlight.setColor(QColor(6, 182, 212, 220))
+                self._highlight.setFillColor(QColor(6, 182, 212, 35))
+                self._highlight.setWidth(2.0)
+
+            self._highlight.show()
+
+    def _clear_highlight(self) -> None:
+        """Safely remove canvas highlight item."""
+        if self._highlight:
+            with contextlib.suppress(Exception):
+                self._highlight.hide()
+            self._highlight = None
+
+    def set_pinned(self, pinned: bool) -> None:
+        """Pin / freeze current card stationary on canvas, or unpin cleanly."""
+        self._pinned = pinned
+        if pinned:
+            self._pinned_global_pos = self._last_global_pos
+            self._pinned_screen_pos = self._last_screen_pos
+            if self._current_feature and self._current_layer and self._current_feature.hasGeometry():
+                self._update_highlight(self._current_feature.geometry(), self._current_layer, pinned=True)
+            if self._last_sampled_html:
+                self._display_hud(self._last_sampled_html)
+            self.pinStateChanged.emit(True)
+            if self._current_layer and self._current_feature:
+                self.featurePinned.emit(self._current_layer, self._current_feature, self._last_sampled_html)
+        else:
+            self._clear_highlight()
+            QToolTip.hideText()
+            self.pinStateChanged.emit(False)
+            self.cleared.emit()
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         etype = event.type()
-        ev_mouse_move = QEvent.Type.MouseMove if hasattr(QEvent, "Type") else QEvent.MouseMove
-        ev_enter = QEvent.Type.Enter if hasattr(QEvent, "Type") else QEvent.Enter
-        ev_leave = QEvent.Type.Leave if hasattr(QEvent, "Type") else QEvent.Leave
-        ev_press = QEvent.Type.MouseButtonPress if hasattr(QEvent, "Type") else QEvent.MouseButtonPress
+        ev_mouse_move = getattr(QEvent.Type, "MouseMove", QEvent.MouseMove)
+        ev_enter = getattr(QEvent.Type, "Enter", QEvent.Enter)
+        ev_leave = getattr(QEvent.Type, "Leave", QEvent.Leave)
+        ev_press = getattr(QEvent.Type, "MouseButtonPress", QEvent.MouseButtonPress)
+        ev_key_press = getattr(QEvent.Type, "KeyPress", QEvent.KeyPress)
 
         vp = self.canvas.viewport() if self.canvas else None
 
-        # 1. Enforce unique inspection cursor across viewport events
+        # Enforce custom cursor if enabled
         if self._cursor_enabled and self._use_custom_cursor and self._inspection_cursor and vp:
             if etype in (ev_mouse_move, ev_enter):
                 if vp.cursor().shape() != self._inspection_cursor.shape():
                     vp.setCursor(self._inspection_cursor)
 
-        # If HUD sampling is disabled, pass through events immediately
         if not self._hud_enabled:
             return super().eventFilter(watched, event)
 
+        # 1. Escape key dismisses pinned tooltip
+        if etype == ev_key_press:
+            key_esc = getattr(Qt.Key, "Key_Escape", None)
+            if hasattr(event, "key") and event.key() == key_esc:
+                if self._pinned:
+                    self.set_pinned(False)
+                    return True
+
         # 2. Mouse Move Handling
-        if etype == ev_mouse_move:
+        elif etype == ev_mouse_move:
             pos = event.position().toPoint() if hasattr(event, "position") else event.pos()
             global_pos = (
                 event.globalPosition().toPoint()
                 if hasattr(event, "globalPosition")
                 else event.globalPos()
             )
-            dist = (pos - self._last_screen_pos).manhattanLength()
             self._last_screen_pos = pos
             self._last_global_pos = global_pos
 
-            # If not pinned, schedule debounced sampling
             if not self._pinned:
-                if dist >= 3 or not self._timer.isActive():
-                    self._timer.start(self.debounce_ms)
+                self._timer.start(self.debounce_ms)
             else:
-                # If pinned, ensure the tooltip stays visible if Qt tried to dismiss it
+                # If pinned, ensure tooltip stays visible
                 if not QToolTip.isVisible() and self._last_sampled_html:
                     self._display_hud(self._last_sampled_html)
 
+        # 3. Mouse Click Handling (Click to Pin or Unpin)
         elif etype == ev_press:
-            # Shift+Click on canvas toggles pin/freeze state
             btn_left = getattr(Qt.MouseButton, "LeftButton", None)
             mod_shift = getattr(Qt.KeyboardModifier, "ShiftModifier", None)
-            if hasattr(event, "button") and event.button() == btn_left:
-                if hasattr(event, "modifiers") and (event.modifiers() & mod_shift):
-                    self.set_pinned(not self._pinned)
-                    return True  # Consume click to avoid disrupting map selection
+            is_left = hasattr(event, "button") and event.button() == btn_left
+            is_shift = bool(hasattr(event, "modifiers") and mod_shift and (event.modifiers() & mod_shift))
 
+            if is_left:
+                if self._click_to_pin or is_shift:
+                    if self._current_feature and not self._pinned:
+                        self.set_pinned(True)
+                        return True
+                    elif self._pinned:
+                        # Clicked again while pinned: unpin
+                        self.set_pinned(False)
+                        return True
+
+        # 4. Canvas Leave
         elif etype == ev_leave:
             if vp:
                 local_pos = vp.mapFromGlobal(QCursor.pos())
                 if not vp.rect().contains(local_pos):
                     self._timer.stop()
                     if not self._pinned:
+                        self._clear_highlight()
                         QToolTip.hideText()
 
         return super().eventFilter(watched, event)
 
+    def _resolve_target_vector_layer(self) -> Optional[QgsVectorLayer]:
+        """Resolve the vector layer to inspect: active vector or top visible vector layer."""
+        if self._active_vector_layer and self._active_vector_layer.isValid():
+            return self._active_vector_layer
+
+        curr = self.canvas.currentLayer()
+        if isinstance(curr, QgsVectorLayer) and curr.isValid():
+            return curr
+
+        # Fallback to first visible vector layer in project
+        for lyr in QgsProject.instance().mapLayers().values():
+            if isinstance(lyr, QgsVectorLayer) and lyr.isValid():
+                return lyr
+        return None
+
     def _on_debounce_timeout(self) -> None:
-        if not self._hud_enabled or (not self._active_raster_layers and not self._active_vector_layer):
-            return
-        if self._pinned:
+        if not self._hud_enabled or self._pinned or not self.canvas:
             return
 
         canvas_crs = self.canvas.mapSettings().destinationCrs()
         map_pt = self.canvas.getCoordinateTransform().toMapCoordinates(self._last_screen_pos)
         project = QgsProject.instance()
 
-        # Composite HUD Builder
-        hud_lines = [
-            '<table width="290" cellspacing="0" cellpadding="0" '
-            'style="font-family:Segoe UI, sans-serif; background-color:#0f172a; '
-            'border:1.5px solid #0284c7; border-collapse:collapse; border-radius:6px;">',
-            '<tr><td colspan="2" bgcolor="#0284c7" style="color:#ffffff; font-size:11px; font-weight:bold; padding:5px 8px;">'
-            '&#128065; Live Canvas Inspector HUD</td></tr>',
-            f'<tr><td colspan="2" style="font-size:9px; color:#94a3b8; padding:3px 8px; background-color:#1e293b; '
-            f'border-bottom:1px solid #334155;">X: {map_pt.x():.2f} &nbsp;|&nbsp; Y: {map_pt.y():.2f}</td></tr>',
-        ]
+        # 1. Primary: Vector Feature Inspection & Card Evaluation
+        vlayer = self._resolve_target_vector_layer()
+        matched_feature: Optional[QgsFeature] = None
 
-        found_any = False
-        status_text = f"X: {map_pt.x():.2f}, Y: {map_pt.y():.2f}"
-
-        # 1. Vector Inspection (if enabled)
-        if self._active_vector_layer and self._active_vector_layer.isValid():
-            vlayer = self._active_vector_layer
+        if vlayer and vlayer.isValid():
             vlayer_crs = vlayer.crs()
             if vlayer_crs != canvas_crs and canvas_crs.isValid() and vlayer_crs.isValid():
                 tr_v = QgsCoordinateTransform(canvas_crs, vlayer_crs, project)
@@ -306,106 +428,117 @@ class CanvasHoverHUD(QObject):
                 v_pt = map_pt
 
             pt_geom = QgsGeometry.fromPointXY(v_pt)
-            tol = self.canvas.mapUnitsPerPixel() * 4
+            tol = self.canvas.mapUnitsPerPixel() * 5.0
             if vlayer_crs.isGeographic() and not canvas_crs.isGeographic():
                 tol = tol / 111320.0
 
             req = (
                 QgsFeatureRequest()
                 .setFilterRect(pt_geom.buffer(tol, 4).boundingBox())
-                .setSubsetOfAttributes([0])
-                .setLimit(1)
+                .setLimit(5)
             )
-            matched_feature = None
+
             for feat in vlayer.getFeatures(req):
-                if feat.geometry().intersects(pt_geom) or feat.geometry().distance(pt_geom) <= tol:
+                if not feat.hasGeometry():
+                    continue
+                geom = feat.geometry()
+                if geom.intersects(pt_geom) or geom.distance(pt_geom) <= tol:
                     matched_feature = feat
                     break
 
-            if matched_feature:
-                found_any = True
-                f_name = matched_feature.attribute(0) or f"ID {matched_feature.id()}"
-                hud_lines.append(
-                    f'<tr><td colspan="2" bgcolor="#1e293b" style="color:#38bdf8; font-size:10px; font-weight:bold; padding:4px 8px;">'
-                    f'&#128506; {html.escape(vlayer.name())}: {html.escape(str(f_name))}</td></tr>'
-                )
+        if matched_feature and vlayer:
+            self._current_feature = matched_feature
+            self._current_layer = vlayer
+            card_html = evaluate_vector_feature_maptip(vlayer, matched_feature)
+            status_text = f"Feature #{matched_feature.id()} ({vlayer.name()})"
 
-        # 2. Raster Layer(s) Sampling
-        for rlayer in self._active_raster_layers:
+            self._last_sampled_html = card_html
+            self._update_highlight(matched_feature.geometry(), vlayer, pinned=False)
+            self.sampleUpdated.emit(card_html, status_text)
+            self.featureHovered.emit(vlayer, matched_feature, card_html)
+            self._display_hud(card_html)
+            return
+
+        # 2. Secondary Fallback: Raster Cell Sampling (if raster layer active)
+        target_rasters = self._active_raster_layers or [
+            lyr for lyr in project.mapLayers().values() if isinstance(lyr, QgsRasterLayer) and lyr.isValid()
+        ]
+
+        if target_rasters:
+            rlayer = target_rasters[0]
             rlayer_crs = rlayer.crs()
+            sample_pt = map_pt
             if rlayer_crs != canvas_crs and canvas_crs.isValid() and rlayer_crs.isValid():
                 tr_r = QgsCoordinateTransform(canvas_crs, rlayer_crs, project)
-                sample_pt = None
                 with contextlib.suppress(Exception):
                     sample_pt = tr_r.transform(map_pt)
-                if sample_pt is None:
-                    continue
-            else:
-                sample_pt = map_pt
 
-            if not rlayer.extent().contains(sample_pt):
-                continue
+            if rlayer.extent().contains(sample_pt) and rlayer.dataProvider():
+                provider = rlayer.dataProvider()
+                lines = [
+                    '<table width="260" cellspacing="0" cellpadding="0" '
+                    'style="font-family:Segoe UI, sans-serif; background-color:#0f172a; border:1px solid #0284c7; '
+                    'border-collapse:collapse; border-radius:6px; overflow:hidden;">',
+                    f'<tr><td colspan="2" bgcolor="#0284c7" style="color:#ffffff; font-size:11px; font-weight:bold; padding:4px 8px;">'
+                    f'&#9638; {html.escape(rlayer.name())}</td></tr>',
+                    f'<tr><td colspan="2" style="font-size:8.5px; color:#94a3b8; padding:2px 8px; background-color:#1e293b; '
+                    f'border-bottom:1px solid #334155;">X: {sample_pt.x():.2f} &nbsp;|&nbsp; Y: {sample_pt.y():.2f}</td></tr>',
+                ]
+                band_cnt = min(4, rlayer.bandCount())
+                for b in range(1, band_cnt + 1):
+                    val, ok = provider.sample(sample_pt, b)
+                    val_str = f"{val:.2f}" if (ok and val is not None and isinstance(val, (int, float))) else "NoData"
+                    lines.append(
+                        f'<tr><td style="color:#cbd5e1; font-size:9.5px; padding:2px 8px; border-bottom:1px solid #1e293b;">Band {b}</td>'
+                        f'<td align="right" style="color:#38bdf8; font-size:10px; font-weight:bold; padding:2px 8px; border-bottom:1px solid #1e293b;">{val_str}</td></tr>'
+                    )
+                lines.append('</table>')
+                raster_html = "\n".join(lines)
+                status_text = f"X: {map_pt.x():.2f}, Y: {map_pt.y():.2f}"
+                self._current_feature = None
+                self._current_layer = None
+                self._last_sampled_html = raster_html
+                self._clear_highlight()
+                self.sampleUpdated.emit(raster_html, status_text)
+                self._display_hud(raster_html)
+                return
 
-            provider = rlayer.dataProvider()
-            if not provider:
-                continue
-
-            found_any = True
-            hud_lines.append(
-                f'<tr><td colspan="2" bgcolor="#1e293b" style="color:#34d399; font-size:10px; font-weight:bold; padding:4px 8px;">'
-                f'&#9638; {html.escape(rlayer.name())}</td></tr>'
-            )
-
-            band_count = min(4, rlayer.bandCount())
-            for b in range(1, band_count + 1):
-                val, ok = provider.sample(sample_pt, b)
-                val_str = f"{val:.2f}" if (ok and val is not None and isinstance(val, (int, float))) else "NoData"
-                hud_lines.append(
-                    f'<tr><td width="55%" style="color:#cbd5e1; font-size:9.5px; padding:3px 8px; border-bottom:1px solid #1e293b;">'
-                    f'Band {b}</td>'
-                    f'<td width="45%" align="right" style="color:#38bdf8; font-size:10px; font-weight:bold; padding:3px 8px; border-bottom:1px solid #1e293b;">'
-                    f'{val_str}</td></tr>'
-                )
-
-        hud_lines.append('</table>')
-        final_html = "\n".join(hud_lines)
-
-        if found_any:
-            self._last_sampled_html = final_html
-            self.sampleUpdated.emit(final_html, status_text)
-            self._display_hud(final_html)
-        else:
-            if not self._pinned:
-                QToolTip.hideText()
+        # 3. Blank Canvas
+        self._current_feature = None
+        self._current_layer = None
+        self._clear_highlight()
+        if not self._pinned:
+            QToolTip.hideText()
+            self.cleared.emit()
 
     def _display_hud(self, html_content: str) -> None:
-        """Displays tooltip offset from cursor with generous dwell duration."""
+        """Display tooltip with generous dwell duration and pin status badge."""
         if not html_content:
             QToolTip.hideText()
             return
 
         vp = self.canvas.viewport() if self.canvas else self.canvas
 
-        # Add pin status indicator in footer
         if self._pinned:
             footer = (
-                '<tr><td colspan="2" bgcolor="#1e293b" style="font-size:8.5px; color:#f59e0b; padding:3px 8px; '
-                'border-top:1px solid #334155; text-align:right;">&#128204; Pinned (Shift+Click or uncheck to unlock)</td></tr>'
+                '<tr><td colspan="2" bgcolor="#1e293b" style="font-size:8.5px; color:#f59e0b; padding:4px 8px; '
+                'border-top:1px solid #334155; text-align:right;">&#128204; <b>PINNED</b> (Click canvas or press Esc to unpin)</td></tr>'
             )
-            # Use frozen position so moving the mouse does not shift the pinned card
             base_pos = self._pinned_global_pos if not self._pinned_global_pos.isNull() else self._last_global_pos
-            offset_pos = base_pos + QPoint(22, 22)
-            # Infinite tolerance rect prevents Qt from dismissing pinned tooltip on mouse moves
+            offset_pos = base_pos + QPoint(20, 20)
+            # Huge tolerance rect prevents Qt from dismissing pinned tooltip
             tolerance_rect = QRect(-500000, -500000, 1000000, 1000000)
         else:
             footer = (
-                '<tr><td colspan="2" bgcolor="#0f172a" style="font-size:8px; color:#64748b; padding:2px 8px; '
-                'border-top:1px solid #334155; text-align:right;">Shift+Click canvas to pin HUD</td></tr>'
+                '<tr><td colspan="2" bgcolor="#0f172a" style="font-size:8px; color:#64748b; padding:3px 8px; '
+                'border-top:1px solid #334155; text-align:right;">&#128161; Click canvas to <b>PIN</b> this card</td></tr>'
             )
-            offset_pos = self._last_global_pos + QPoint(22, 22)
-            # When unpinned, use canvas viewport rect so cursor moving inside canvas does NOT flicker/close
+            offset_pos = self._last_global_pos + QPoint(20, 20)
             tolerance_rect = vp.rect() if (vp and hasattr(vp, "rect")) else QRect(0, 0, 10000, 10000)
 
         display_html = html_content.replace('</table>', f'{footer}</table>')
-        # Show for 60 seconds
         QToolTip.showText(offset_pos, display_html, vp, tolerance_rect, 60000)
+
+
+# Alias for backward compatibility
+CanvasMapTipInspector = CanvasHoverHUD
