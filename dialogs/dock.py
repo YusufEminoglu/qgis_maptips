@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
-from qgis.PyQt.QtCore import Qt, QTimer, QUrl, QVariant
+from qgis.PyQt.QtCore import QEvent, Qt, QTimer, QUrl
 from qgis.PyQt.QtGui import QColor, QDesktopServices
 from qgis.PyQt.QtWidgets import (
     QApplication,
@@ -80,6 +80,14 @@ if TYPE_CHECKING:
     from qgis.gui import QgisInterface
 
 
+def _is_numeric_field(field: Any) -> bool:
+    """Check if a QgsField represents numeric data across QGIS 3 & 4 runtimes."""
+    if hasattr(field, "isNumeric"):
+        return bool(field.isNumeric())
+    typeName = getattr(field, "typeName", lambda: "")().lower()
+    return any(k in typeName for k in ("int", "double", "real", "num", "float", "decimal", "long"))
+
+
 class QgisMapTipsDock(QDockWidget):
     """Dockable studio for designing MapTips and managing layer actions."""
 
@@ -100,6 +108,12 @@ class QgisMapTipsDock(QDockWidget):
         self._current_layer: Optional[QgsMapLayer] = None
         self._cadastre_tool: Optional[Any] = None
 
+        # Debounced preview timer (150ms) to ensure fluid typing & UI responsiveness
+        self._preview_timer = QTimer(self)
+        self._preview_timer.setSingleShot(True)
+        self._preview_timer.setInterval(150)
+        self._preview_timer.timeout.connect(self._update_preview)
+
         self._init_ui()
         apply_adaptive_theme(self)
 
@@ -115,6 +129,29 @@ class QgisMapTipsDock(QDockWidget):
         self.iface.currentLayerChanged.connect(self._on_qgis_active_layer_changed)
 
         self._refresh_layers()
+
+    def _schedule_preview_update(self) -> None:
+        """Debounce live card preview updates to prevent UI stutter during typing."""
+        if hasattr(self, "_preview_timer"):
+            self._preview_timer.start()
+        else:
+            self._update_preview()
+
+    def changeEvent(self, event: Any) -> None:
+        """Dynamically adapt dock styles when QGIS theme or OS palette changes."""
+        if event and hasattr(event, "type"):
+            ev_type = event.type()
+            pal_change = getattr(QEvent.Type, "PaletteChange", None)
+            app_pal_change = getattr(QEvent.Type, "ApplicationPaletteChange", None)
+            if ev_type in (pal_change, app_pal_change):
+                apply_adaptive_theme(self)
+        super().changeEvent(event)
+
+    def closeEvent(self, event: Any) -> None:
+        """Safely detach HUD reticle cursor and stop canvas event filters on dock close."""
+        if hasattr(self, "_hud") and self._hud:
+            self._hud.stop()
+        super().closeEvent(event)
 
     def _init_ui(self) -> None:
         root = QWidget()
@@ -336,13 +373,18 @@ class QgisMapTipsDock(QDockWidget):
         self.card_width_spin.setSingleStep(10)
         self.card_width_spin.setValue(320)
         self.card_width_spin.setSuffix(" px")
-        self.card_width_spin.valueChanged.connect(self._update_preview)
+        self.card_width_spin.valueChanged.connect(self._schedule_preview_update)
         form_style.addRow("Width:", self.card_width_spin)
 
         self.cb_card_actions = QCheckBox("Show 1-Click Action Buttons Ribbon")
         self.cb_card_actions.setChecked(True)
         self.cb_card_actions.toggled.connect(self._update_preview)
         form_style.addRow("", self.cb_card_actions)
+
+        # Wrap policy for narrow docks
+        wrap_policy = getattr(getattr(QFormLayout, "RowWrapPolicy", QFormLayout), "WrapLongRows", None)
+        if wrap_policy is not None:
+            form_style.setRowWrapPolicy(wrap_policy)
 
         self.section_style.add_layout(form_style)
         scroll_layout.addWidget(self.section_style)
@@ -352,6 +394,8 @@ class QgisMapTipsDock(QDockWidget):
         form_fields = QFormLayout()
         form_fields.setContentsMargins(4, 4, 4, 4)
         form_fields.setSpacing(4)
+        if wrap_policy is not None:
+            form_fields.setRowWrapPolicy(wrap_policy)
 
         self.title_field_combo = QComboBox()
         self.title_field_combo.currentIndexChanged.connect(self._update_preview)
@@ -365,14 +409,19 @@ class QgisMapTipsDock(QDockWidget):
         self.kpi_field_combo.currentIndexChanged.connect(self._update_preview)
         form_fields.addRow("Main KPI:", self.kpi_field_combo)
 
+        self.progress_max_edit = QLineEdit("100")
+        self.progress_max_edit.setPlaceholderText("e.g. 100 or 'capacity'")
+        self.progress_max_edit.textChanged.connect(self._schedule_preview_update)
+        form_fields.addRow("Max Value:", self.progress_max_edit)
+
         self.kpi_label_edit = QLineEdit()
         self.kpi_label_edit.setPlaceholderText("e.g. Total Score / Capacity")
-        self.kpi_label_edit.textChanged.connect(self._update_preview)
+        self.kpi_label_edit.textChanged.connect(self._schedule_preview_update)
         form_fields.addRow("KPI Label:", self.kpi_label_edit)
 
         self.kpi_unit_edit = QLineEdit()
         self.kpi_unit_edit.setPlaceholderText("e.g. m², %, EUR, km/h")
-        self.kpi_unit_edit.textChanged.connect(self._update_preview)
+        self.kpi_unit_edit.textChanged.connect(self._schedule_preview_update)
         form_fields.addRow("KPI Unit:", self.kpi_unit_edit)
 
         self.section_fields.add_layout(form_fields)
@@ -439,11 +488,11 @@ class QgisMapTipsDock(QDockWidget):
         self.spin_decimals.setRange(0, 6)
         self.spin_decimals.setValue(2)
         self.spin_decimals.setSuffix(" dec.")
-        self.spin_decimals.valueChanged.connect(self._update_preview)
+        self.spin_decimals.valueChanged.connect(self._schedule_preview_update)
         form_adv.addRow("Decimals:", self.spin_decimals)
 
         self.edit_null_text = QLineEdit("—")
-        self.edit_null_text.textChanged.connect(self._update_preview)
+        self.edit_null_text.textChanged.connect(self._schedule_preview_update)
         form_adv.addRow("Null Text:", self.edit_null_text)
 
         # Conditional Badge
@@ -458,10 +507,10 @@ class QgisMapTipsDock(QDockWidget):
         cond_row = QHBoxLayout()
         cond_row.setSpacing(4)
         self.cond_op_combo = QComboBox()
-        self.cond_op_combo.addItems([">=", ">", "<=", "<", "=="])
+        self.cond_op_combo.addItems([">=", ">", "<=", "<", "="])
         self.cond_op_combo.currentIndexChanged.connect(self._update_preview)
         self.cond_val_edit = QLineEdit("50")
-        self.cond_val_edit.textChanged.connect(self._update_preview)
+        self.cond_val_edit.textChanged.connect(self._schedule_preview_update)
         cond_row.addWidget(self.cond_op_combo)
         cond_row.addWidget(self.cond_val_edit)
         form_adv.addRow("Threshold:", cond_row)
@@ -469,9 +518,9 @@ class QgisMapTipsDock(QDockWidget):
         lbl_row = QHBoxLayout()
         lbl_row.setSpacing(4)
         self.cond_lbl_true = QLineEdit("Pass")
-        self.cond_lbl_true.textChanged.connect(self._update_preview)
+        self.cond_lbl_true.textChanged.connect(self._schedule_preview_update)
         self.cond_lbl_false = QLineEdit("Alert")
-        self.cond_lbl_false.textChanged.connect(self._update_preview)
+        self.cond_lbl_false.textChanged.connect(self._schedule_preview_update)
         lbl_row.addWidget(self.cond_lbl_true)
         lbl_row.addWidget(self.cond_lbl_false)
         form_adv.addRow("Labels (T / F):", lbl_row)
@@ -910,9 +959,14 @@ class QgisMapTipsDock(QDockWidget):
                 self.layer_combo.setCurrentIndex(idx)
 
     def _on_target_layer_selected(self, index: int) -> None:
+        if hasattr(self, "_current_layer") and isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+            with contextlib.suppress(Exception):
+                self._current_layer.selectionChanged.disconnect(self._on_layer_selection_changed)
+
         if index < 0 or self.layer_combo.count() == 0:
             self._current_layer = None
             self.layer_info_label.setText("No layer selected")
+            self._update_preview()
             return
 
         lyr_id = self.layer_combo.currentData()
@@ -921,6 +975,7 @@ class QgisMapTipsDock(QDockWidget):
 
         if not layer or not layer.isValid():
             self.layer_info_label.setText("Invalid layer")
+            self._update_preview()
             return
 
         if isinstance(layer, QgsVectorLayer):
@@ -933,6 +988,8 @@ class QgisMapTipsDock(QDockWidget):
             self._populate_vector_fields(layer)
             self._hud.set_vector_layer(layer)
             self._refresh_active_actions_list()
+            with contextlib.suppress(Exception):
+                layer.selectionChanged.connect(self._on_layer_selection_changed)
         elif isinstance(layer, QgsRasterLayer):
             self.layer_info_label.setText(
                 f"Raster · {layer.bandCount()} bands · {layer.width()}x{layer.height()} · CRS: {layer.crs().authid()}"
@@ -941,6 +998,33 @@ class QgisMapTipsDock(QDockWidget):
             self._refresh_active_actions_list()
 
         self._update_preview()
+
+    def _on_layer_selection_changed(self) -> None:
+        """Reactively synchronize live card preview when canvas feature selection changes."""
+        if not isinstance(self._current_layer, QgsVectorLayer) or not self._current_layer.isValid():
+            return
+        selected = self._current_layer.selectedFeatures()
+        if selected:
+            self._sample_features = selected[:25]
+            self._sample_feat_index = 0
+        else:
+            self._reload_sample_features()
+        self._schedule_preview_update()
+
+    def _reload_sample_features(self) -> None:
+        """Fetch up to 50 sample features for rapid card preview cycling."""
+        self._sample_features = []
+        self._sample_feat_index = 0
+        if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+            with contextlib.suppress(Exception):
+                req = QgsFeatureRequest()
+                if hasattr(QgsFeatureRequest, "Flag") and hasattr(QgsFeatureRequest.Flag, "NoGeometry"):
+                    req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
+                elif hasattr(QgsFeatureRequest, "NoGeometry"):
+                    req.setFlags(QgsFeatureRequest.NoGeometry)
+                req.setLimit(50)
+                for feat in self._current_layer.getFeatures(req):
+                    self._sample_features.append(feat)
 
     def _populate_vector_fields(self, layer: QgsVectorLayer) -> None:
         combos = [
@@ -971,24 +1055,7 @@ class QgisMapTipsDock(QDockWidget):
             self.attrs_list.addItem(item)
 
         # Cache sample features for responsive live card testing
-        self._sample_features = []
-        self._sample_feat_index = 0
-        with contextlib.suppress(Exception):
-            req = QgsFeatureRequest()
-            if hasattr(QgsFeatureRequest, "Flag") and hasattr(QgsFeatureRequest.Flag, "NoGeometry"):
-                req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
-            elif hasattr(QgsFeatureRequest, "NoGeometry"):
-                req.setFlags(QgsFeatureRequest.NoGeometry)
-            req.setLimit(50)
-            for feat in layer.getFeatures(req):
-                self._sample_features.append(feat)
-
-        if not self._sample_features:
-            with contextlib.suppress(Exception):
-                for i, feat in enumerate(layer.getFeatures()):
-                    self._sample_features.append(feat)
-                    if i >= 49:
-                        break
+        self._reload_sample_features()
 
         for name in fields.names():
             nl = name.lower()
@@ -1155,11 +1222,7 @@ class QgisMapTipsDock(QDockWidget):
             combo.addItem("(None)", "")
             for f in fields:
                 fn = f.name()
-                is_num = False
-                if hasattr(f, "isNumeric") and f.isNumeric():
-                    is_num = True
-                elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
-                    is_num = True
+                is_num = _is_numeric_field(f)
                 display_name = f"🔢 {fn}" if is_num else fn
                 combo.addItem(display_name, fn)
             idx = combo.findData(curr_val)
@@ -1191,11 +1254,7 @@ class QgisMapTipsDock(QDockWidget):
         if self._current_layer:
             for f in self._current_layer.fields():
                 fn = f.name()
-                is_num = False
-                if hasattr(f, "isNumeric") and f.isNumeric():
-                    is_num = True
-                elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
-                    is_num = True
+                is_num = _is_numeric_field(f)
                 combo_fld.addItem(f"🔢 {fn}" if is_num else fn, fn)
 
         if field_name:
@@ -1266,11 +1325,7 @@ class QgisMapTipsDock(QDockWidget):
         if self._current_layer:
             for f in self._current_layer.fields():
                 fn = f.name()
-                is_num = False
-                if hasattr(f, "isNumeric") and f.isNumeric():
-                    is_num = True
-                elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
-                    is_num = True
+                is_num = _is_numeric_field(f)
                 if is_num and fn not in selected_fields and fn.lower() not in ("fid", "id", "gid", "objectid"):
                     next_field = fn
                     break
@@ -1280,16 +1335,7 @@ class QgisMapTipsDock(QDockWidget):
     def _auto_detect_donut_fields(self) -> None:
         if not self._current_layer:
             return
-        num_fields = []
-        for f in self._current_layer.fields():
-            fn = f.name()
-            is_num = False
-            if hasattr(f, "isNumeric") and f.isNumeric():
-                is_num = True
-            elif f.type() in (QVariant.Int, QVariant.Double, QVariant.LongLong):
-                is_num = True
-            if is_num:
-                num_fields.append(fn)
+        num_fields = [f.name() for f in self._current_layer.fields() if _is_numeric_field(f)]
 
         candidates = [
             fn for fn in num_fields
@@ -1355,16 +1401,13 @@ class QgisMapTipsDock(QDockWidget):
 
         if isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
             sample_feature = None
-            selected = self._current_layer.selectedFeatures()
-            if selected:
-                sample_feature = selected[0]
-                if hasattr(self, "feat_nav_lbl"):
-                    self.feat_nav_lbl.setText(f"Selected (ID: {sample_feature.id()})")
-            elif getattr(self, "_sample_features", []):
+            has_selection = bool(self._current_layer.selectedFeatureCount() > 0)
+            if getattr(self, "_sample_features", []):
                 idx = max(0, min(getattr(self, "_sample_feat_index", 0), len(self._sample_features) - 1))
                 sample_feature = self._sample_features[idx]
+                prefix = "Selected " if has_selection else "Feature "
                 if hasattr(self, "feat_nav_lbl"):
-                    self.feat_nav_lbl.setText(f"Feature {idx + 1} of {len(self._sample_features)} (ID: {sample_feature.id()})")
+                    self.feat_nav_lbl.setText(f"{prefix}{idx + 1} of {len(self._sample_features)} (ID: {sample_feature.id()})")
             else:
                 with contextlib.suppress(Exception):
                     req = QgsFeatureRequest()
@@ -1425,10 +1468,16 @@ class QgisMapTipsDock(QDockWidget):
             return
 
         if hasattr(self, "feat_nav_lbl"):
-            self.feat_nav_lbl.setText("Template Demo Preview")
+            self.feat_nav_lbl.setText("No Vector Layer Selected")
         self._current_sample_feat = None
-        centered_html = f'<div align="center" style="margin:4px auto; padding:2px;">{raw_html}</div>'
-        self.preview_box.setHtml(centered_html)
+        empty_state_html = (
+            '<div align="center" style="margin:20px auto; padding:24px 16px; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; text-align: center; color: #64748b;">'
+            '<div style="font-size: 36px; margin-bottom: 8px;">🗺️</div>'
+            '<div style="font-size: 14px; font-weight: 600; color: #1e293b; margin-bottom: 4px;">No Vector Layer Selected</div>'
+            '<div style="font-size: 12px; color: #64748b; line-height: 1.5; max-width: 280px; margin: 0 auto;">Select a vector layer above to preview live attribute cards and customized MapTips.</div>'
+            '</div>'
+        )
+        self.preview_box.setHtml(empty_state_html)
         if hasattr(self, "preview_tabs"):
             self.preview_tabs.setTabText(0, f"Rendered Card ({config.card_width} px)")
 
@@ -1905,3 +1954,9 @@ class QgisMapTipsDock(QDockWidget):
             QgsProject.instance().layersAdded.disconnect(self._refresh_layers)
             QgsProject.instance().layersRemoved.disconnect(self._refresh_layers)
             self.iface.currentLayerChanged.disconnect(self._on_qgis_active_layer_changed)
+        with contextlib.suppress(Exception):
+            if hasattr(self.iface, "actionMapTips") and self.iface.actionMapTips():
+                self.iface.actionMapTips().toggled.disconnect(self._sync_maptip_action_state)
+        with contextlib.suppress(Exception):
+            if hasattr(self, "_current_layer") and isinstance(self._current_layer, QgsVectorLayer) and self._current_layer.isValid():
+                self._current_layer.selectionChanged.disconnect(self._on_layer_selection_changed)

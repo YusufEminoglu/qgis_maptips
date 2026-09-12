@@ -46,7 +46,8 @@ EXPORT_CARD_REPORT_PYTHON_CODE = (
     "                 '</style></head><body><div class=\"card-wrap\">' + html_text + '</div></body></html>'); "
     "    tmp = os.path.join(tempfile.gettempdir(), f'feature_card_[% $id %].html'); "
     "    with open(tmp, 'w', encoding='utf-8') as f: f.write(full_html); "
-    "    webbrowser.open(f'file:///{tmp}')"
+    "    u_tmp = tmp.replace('\\\\', '/'); "
+    "    webbrowser.open(f'file:///{u_tmp}')"
 )
 
 # Instant MEGSIS Cadastral Query Python Action (0.2s API query + adds polygon layer + copies summary)
@@ -185,6 +186,56 @@ AVAILABLE_ACTIONS = [
         "command": EXPORT_CARD_REPORT_PYTHON_CODE,
         "description": "Render and open standalone HTML feature card report in browser",
     },
+    {
+        "key": "zoom_feature",
+        "name": "Zoom to Feature",
+        "short_title": "Zoom",
+        "type": "GenericPython",
+        "command": (
+            "from qgis.core import QgsProject, QgsCoordinateTransform; from qgis.utils import iface; "
+            "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
+            "feat = layer.getFeature([% $id %]) if layer else None; "
+            "if feat and feat.hasGeometry() and iface: "
+            "    geom = feat.geometry(); "
+            "    box = geom.boundingBox(); "
+            "    canvas = iface.mapCanvas(); "
+            "    if layer.crs() != canvas.mapSettings().destinationCrs(): "
+            "        tr = QgsCoordinateTransform(layer.crs(), canvas.mapSettings().destinationCrs(), QgsProject.instance()); "
+            "        box = tr.transformBoundingBox(box); "
+            "    pad = max(15.0, max(box.width(), box.height()) * 0.15); "
+            "    canvas.setExtent(box.buffered(pad)); "
+            "    canvas.refresh()"
+        ),
+        "description": "Zoom and center map canvas to this feature with adaptive padding",
+    },
+    {
+        "key": "buffer_feature",
+        "name": "Buffer Feature (50m Temp Layer)",
+        "short_title": "Buffer",
+        "type": "GenericPython",
+        "command": (
+            "from qgis.core import QgsProject, QgsVectorLayer, QgsFeature; from qgis.utils import iface; "
+            "layer = QgsProject.instance().mapLayer('[% @layer_id %]'); "
+            "feat = layer.getFeature([% $id %]) if layer else None; "
+            "if feat and feat.hasGeometry(): "
+            "    dist = 50.0 / 111320.0 if layer.crs().isGeographic() else 50.0; "
+            "    buf_geom = feat.geometry().buffer(dist, 16); "
+            "    layers = QgsProject.instance().mapLayersByName('Feature Buffers (Temp)'); "
+            "    b_layer = layers[0] if layers else None; "
+            "    if not b_layer: "
+            "        uri = f'Polygon?crs={layer.crs().authid()}&field=src_id:string(20)&field=dist_m:double'; "
+            "        b_layer = QgsVectorLayer(uri, 'Feature Buffers (Temp)', 'memory'); "
+            "        b_layer.setOpacity(0.45); "
+            "        QgsProject.instance().addMapLayer(b_layer); "
+            "    f_new = QgsFeature(b_layer.fields()); "
+            "    f_new.setGeometry(buf_geom); "
+            "    f_new.setAttributes([str(feat.id()), 50.0]); "
+            "    b_layer.dataProvider().addFeatures([f_new]); "
+            "    b_layer.triggerRepaint(); "
+            "    iface.messageBar().pushInfo('Qgis MapTips', 'Created 50m buffer polygon in temporary layer.') if hasattr(iface, 'messageBar') else None"
+        ),
+        "description": "Generate a 50m spatial buffer polygon into a temporary memory layer",
+    },
 ]
 
 
@@ -202,19 +253,27 @@ def build_open_file_action(field_name: str) -> dict[str, str]:
 
 
 def build_select_intersecting_action(target_layer_name: str) -> dict[str, str]:
-    """Return a Python action selecting intersecting features in another layer."""
+    """Return a high-performance Python action selecting intersecting features in another layer."""
     clean_tgt = target_layer_name.strip()
+    escaped_tgt = clean_tgt.replace("\\", "\\\\").replace("'", "\\'")
     code = (
-        f"from qgis.core import QgsProject; "
+        f"from qgis.core import QgsProject, QgsCoordinateTransform, QgsFeatureRequest; "
         f"src = QgsProject.instance().mapLayer('[% @layer_id %]'); "
-        f"tgts = QgsProject.instance().mapLayersByName('{clean_tgt}'); "
+        f"tgts = QgsProject.instance().mapLayersByName('{escaped_tgt}'); "
         f"if src and tgts: "
         f"    feat = src.getFeature([% $id %]); "
         f"    tgt = tgts[0]; "
-        f"    ids = [f.id() for f in tgt.getFeatures() if f.geometry().intersects(feat.geometry())]; "
-        f"    tgt.selectByIds(ids); "
-        f"    from qgis.utils import iface; "
-        f"    iface.messageBar().pushInfo('Qgis MapTips', f'Selected {{len(ids)}} intersecting features in {clean_tgt}.') if hasattr(iface, 'messageBar') else None"
+        f"    geom = feat.geometry() if feat and feat.hasGeometry() else None; "
+        f"    if geom: "
+        f"        if src.crs() != tgt.crs(): "
+        f"            tr = QgsCoordinateTransform(src.crs(), tgt.crs(), QgsProject.instance()); "
+        f"            geom.transform(tr); "
+        f"        req = QgsFeatureRequest().setFilterRect(geom.boundingBox()); "
+        f"        req.setSubsetOfAttributes([]); "
+        f"        ids = [f.id() for f in tgt.getFeatures(req) if f.geometry().intersects(geom)]; "
+        f"        tgt.selectByIds(ids); "
+        f"        from qgis.utils import iface; "
+        f"        iface.messageBar().pushInfo('Qgis MapTips', f'Selected {{len(ids)}} intersecting features in {escaped_tgt}.') if hasattr(iface, 'messageBar') else None"
     )
     return {
         "key": f"select_intersects_{clean_tgt}",
@@ -243,6 +302,8 @@ def apply_actions_to_layer(
     action_keys: list[str],
     file_field: str = "",
     intersect_target_layer: str = "",
+    custom_url_name: str = "",
+    custom_url_template: str = "",
 ) -> int:
     """Add selected actions to the layer's action manager.
 
@@ -260,6 +321,8 @@ def apply_actions_to_layer(
         actions_to_add.append(build_open_file_action(file_field))
     if intersect_target_layer and "select_intersects" in norm_keys:
         actions_to_add.append(build_select_intersecting_action(intersect_target_layer))
+    if custom_url_template and "custom_url" in norm_keys:
+        actions_to_add.append(build_custom_url_action(custom_url_name or "Custom Web Action", custom_url_template))
 
     target_names = {item["name"] for item in actions_to_add}
     # Remove older matching actions so they are refreshed with bug-fixed commands, plus any duplicate TKGM actions

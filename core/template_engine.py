@@ -99,17 +99,43 @@ PALETTES = {
         "border": "#ddd6fe",
     },
     "amber": {
-        "name": "Cadastral Amber",
+        "name": "Amber Warmth",
         "header_bg": "#d97706",
         "header_text": "#ffffff",
         "sub_bg": "#b45309",
         "sub_text": "#fef3c7",
         "accent": "#f59e0b",
         "card_bg": "#ffffff",
-        "row_alt": "#fffbeb",
-        "text_primary": "#78350f",
-        "text_secondary": "#92400e",
-        "border": "#fde68a",
+        "row_alt": "#f8fafc",
+        "text_primary": "#0f172a",
+        "text_secondary": "#64748b",
+        "border": "#e2e8f0",
+    },
+    "obsidian": {
+        "name": "Obsidian Dark",
+        "header_bg": "#1e293b",
+        "header_text": "#f8fafc",
+        "sub_bg": "#0f172a",
+        "sub_text": "#94a3b8",
+        "accent": "#38bdf8",
+        "card_bg": "#0f172a",
+        "row_alt": "#1e293b",
+        "text_primary": "#f8fafc",
+        "text_secondary": "#94a3b8",
+        "border": "#334155",
+    },
+    "night_emerald": {
+        "name": "Night Emerald",
+        "header_bg": "#064e3b",
+        "header_text": "#ecfdf5",
+        "sub_bg": "#022c22",
+        "sub_text": "#a7f3d0",
+        "accent": "#10b981",
+        "card_bg": "#061a14",
+        "row_alt": "#0b2e24",
+        "text_primary": "#f0fdf4",
+        "text_secondary": "#6ee7b7",
+        "border": "#047857",
     },
 }
 
@@ -182,26 +208,22 @@ def build_safe_attribute_expr(
     decimal_places: int = 2,
     null_text: str = "—",
 ) -> str:
-    """Return a robust QGIS expression handling NULLs, integers, floats, and strings."""
+    """Return a high-performance QGIS expression evaluating to_real() only once."""
     if not field_name:
         return f"'{null_text}'"
     fld = field_name if (field_name.startswith('"') and field_name.endswith('"')) else f'"{field_name}"'
     if not format_numbers:
         return f"coalesce(nullif(to_string({fld}), ''), '{null_text}')"
 
-    # Native QGIS expression:
-    # 1. NULL or whitespace -> null_text
-    # 2. Try parsing numeric value via try(to_real(x), NULL):
-    #    - If integer (equal to round(x, 0)) -> format_number(x, 0)
-    #    - Else float -> format_number(x, decimal_places)
-    # 3. Non-numeric text -> to_string(x)
+    # Evaluates to_real({fld}) exactly once into @v, eliminating redundant AST evaluations
     return (
+        f"with_variable('v', try(to_real({fld}), NULL), "
         f"CASE "
         f"WHEN {fld} IS NULL OR length(trim(to_string({fld}))) = 0 THEN '{null_text}' "
-        f"WHEN try(to_real({fld}), NULL) IS NOT NULL THEN ("
-        f"CASE WHEN to_real({fld}) = round(to_real({fld}), 0) THEN format_number(to_real({fld}), 0) "
-        f"ELSE format_number(to_real({fld}), {decimal_places}) END) "
-        f"ELSE to_string({fld}) END"
+        f"WHEN @v IS NOT NULL THEN ("
+        f"CASE WHEN @v = round(@v, 0) THEN format_number(@v, 0) "
+        f"ELSE format_number(@v, {decimal_places}) END) "
+        f"ELSE to_string({fld}) END)"
     )
 
 
@@ -209,20 +231,28 @@ def build_conditional_badge_html(rule: dict[str, Any]) -> str:
     """Build a dynamic status badge using QGIS CASE WHEN expression."""
     fld = rule.get("field", "")
     op = rule.get("op", ">")
-    val = rule.get("val", "0")
+    if op == "==":
+        op = "="
+    raw_val = str(rule.get("val", "0")).strip()
+    try:
+        float(raw_val)
+        val_expr = raw_val
+    except ValueError:
+        val_expr = "'" + raw_val.replace("'", "''") + "'"
+
     color_true = rule.get("color_true", "#ef4444")
     color_false = rule.get("color_false", "#10b981")
-    label_true = html.escape(rule.get("label_true", "Alert"))
-    label_false = html.escape(rule.get("label_false", "Normal"))
+    safe_lbl_true = rule.get("label_true", "Alert").replace("'", "''")
+    safe_lbl_false = rule.get("label_false", "Normal").replace("'", "''")
 
-    expr_bg = f"CASE WHEN (\"{fld}\" {op} {val}) THEN '{color_true}' ELSE '{color_false}' END"
-    expr_lbl = f"CASE WHEN (\"{fld}\" {op} {val}) THEN '{label_true}' ELSE '{label_false}' END"
+    expr_bg = f"CASE WHEN (\"{fld}\" {op} {val_expr}) THEN '{color_true}' ELSE '{color_false}' END"
+    expr_lbl = f"CASE WHEN (\"{fld}\" {op} {val_expr}) THEN '{safe_lbl_true}' ELSE '{safe_lbl_false}' END"
 
     return (
         f'<tr><td colspan="2" align="center" style="padding:4px 8px; border-bottom:1px solid #e2e8f0;">'
         f'<table cellspacing="0" cellpadding="0" style="margin:2px auto;"><tr>'
         f'<td bgcolor="[% {expr_bg} %]" style="color:#ffffff; font-size:9px; font-weight:bold; '
-        f'padding:2px 8px; border-radius:3px; text-align:center;">'
+        f'padding:2px 10px; border-radius:10px; text-align:center;">'
         f'[% {expr_lbl} %]'
         f'</td></tr></table>'
         f'</td></tr>'
@@ -231,22 +261,27 @@ def build_conditional_badge_html(rule: dict[str, Any]) -> str:
 
 def build_relational_metric_row(metric: dict[str, Any], pal: dict[str, str], row_bg: str) -> str:
     """Build a relational/spatial aggregate row linking to another project layer."""
-    target_layer = metric.get("target_layer", "")
+    target_layer = metric.get("target_layer", "").replace("'", "''")
     op = metric.get("op", "intersects")
-    agg = metric.get("aggregate", "count")
-    fld = metric.get("field", "id")
-    label = html.escape(metric.get("label", f"{agg.title()} in {target_layer}"))
+    agg = metric.get("aggregate", "count").lower()
+    raw_fld = metric.get("field", "id").strip('"')
+    fld_expr = f'"{raw_fld}"'
+    label = html.escape(metric.get("label", f"{agg.title()} in {metric.get('target_layer', '')}"))
 
-    if op == "intersects" and agg == "count":
-        expr = f"coalesce(overlay_intersects('{target_layer}', count:=\"{fld}\"), 0)"
-    elif op == "intersects":
-        expr = f"coalesce(overlay_intersects('{target_layer}', expression:=\"{fld}\", aggregate:='{agg}'), 0)"
-    elif op == "contains" and agg == "count":
-        expr = f"coalesce(overlay_contains('{target_layer}', count:=\"{fld}\"), 0)"
+    if op == "intersects":
+        if agg == "count":
+            expr = f"coalesce(array_length(overlay_intersects('{target_layer}')), 0)"
+        else:
+            expr = f"coalesce(array_{agg}(overlay_intersects('{target_layer}', {fld_expr})), 0)"
+    elif op == "contains":
+        if agg == "count":
+            expr = f"coalesce(array_length(overlay_contains('{target_layer}')), 0)"
+        else:
+            expr = f"coalesce(array_{agg}(overlay_contains('{target_layer}', {fld_expr})), 0)"
     elif op == "nearest":
-        expr = f"coalesce(overlay_nearest('{target_layer}', \"{fld}\")[0], 'None')"
+        expr = f"coalesce(array_first(overlay_nearest('{target_layer}', {fld_expr})), 'None')"
     else:
-        expr = f"coalesce(overlay_intersects('{target_layer}', count:=\"{fld}\"), 0)"
+        expr = f"coalesce(array_length(overlay_intersects('{target_layer}')), 0)"
 
     return (
         f'<tr bgcolor="{row_bg}">'
@@ -339,7 +374,7 @@ def compile_maptip_html(config: TemplateConfig) -> str:
     lines = []
     lines.append(
         f'<table width="{w}" cellspacing="0" cellpadding="0" '
-        f'style="width:{w}px; min-width:{w}px; max-width:{w}px; font-family:Segoe UI, sans-serif; '
+        f'style="width:{w}px; min-width:{w}px; max-width:{w}px; font-family:-apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, Helvetica, Arial, sans-serif; '
         f'background-color:{pal["card_bg"]}; border:1px solid {pal["border"]}; border-collapse:collapse;">'
     )
 
@@ -460,9 +495,13 @@ def compile_maptip_html(config: TemplateConfig) -> str:
             border_color=pal["border"],
             text_color=pal["text_secondary"],
         )
+        valid_img_cond = (
+            f'(length(trim(coalesce(to_string("{config.media_field}"), \'\'))) > 0 AND '
+            f'("{config.media_field}" LIKE \'http%\' OR "{config.media_field}" LIKE \'data:%\' OR file_exists("{config.media_field}")))'
+        )
         if config.media_fallback == "hide":
             lines.append(
-                f'[% CASE WHEN length(trim(coalesce(to_string("{config.media_field}"), \'\'))) > 0 THEN '
+                f'[% CASE WHEN {valid_img_cond} THEN '
                 f'\'<tr><td colspan="2" align="center" style="padding:6px; background-color:{pal["row_alt"]}; '
                 f'border-bottom:1px solid {pal["border"]};">\' || '
                 f'\'<img src="\' || "{config.media_field}" || \'" width="{media_w}" '
@@ -471,7 +510,7 @@ def compile_maptip_html(config: TemplateConfig) -> str:
             )
         else:
             src_expr = (
-                f'CASE WHEN length(trim(coalesce(to_string("{config.media_field}"), \'\'))) > 0 '
+                f'CASE WHEN {valid_img_cond} '
                 f'THEN "{config.media_field}" ELSE \'{placeholder_uri}\' END'
             )
             lines.append(

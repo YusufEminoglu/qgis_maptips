@@ -259,6 +259,23 @@ QTextBrowser#previewBox {{
     border: 1px solid {t['border']};
     border-radius: 6px;
 }}
+QListWidget {{
+    background-color: {t['input_surface']};
+    color: {t['text']};
+    border: 1px solid {t['border']};
+    border-radius: 4px;
+    padding: 2px;
+    font-size: 8pt;
+}}
+QListWidget::item {{
+    padding: 3px 5px;
+    border-bottom: 1px solid {t['border']};
+}}
+QListWidget::item:selected {{
+    background-color: {t['accent']};
+    color: {t['accent_text']};
+    border-radius: 3px;
+}}
 QPushButton#presetChip {{
     background-color: {t['card']};
     color: {t['text']};

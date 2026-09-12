@@ -20,6 +20,7 @@ try:
         QgsCoordinateReferenceSystem,
         QgsCoordinateTransform,
         QgsFeature,
+        QgsFeatureRequest,
         QgsGeometry,
         QgsPalLayerSettings,
         QgsPointXY,
@@ -86,6 +87,20 @@ except ImportError:  # Pure-Python test environment fallback
         @classmethod
         def fromMultiPolygonXY(cls, polys: Any) -> Any:
             return cls(polys)
+
+    class QgsFeatureRequest:  # type: ignore
+        class Flag:
+            NoGeometry = 1
+        NoGeometry = 1
+
+        def setFilterExpression(self, expr: str) -> Any:
+            return self
+
+        def setFlags(self, flags: Any) -> Any:
+            return self
+
+        def setLimit(self, limit: int) -> Any:
+            return self
 
     class QgsMapCanvas:  # type: ignore
         pass
@@ -571,7 +586,7 @@ def get_or_create_cadastre_layer(project: Optional[QgsProject] = None) -> QgsVec
                 ("sorgu_tarihi", "Sorgu Tarihi"),
             ],
             footer_text="TKGM MEGSİS Resmi Kadastro",
-            show_card_actions=True,
+            show_action_buttons=True,
             card_action_keys=["google_satellite", "google_streetview", "copy_clipboard", "export_card_report"],
         )
         layer.setMapTipTemplate(compile_maptip_html(cfg))
@@ -595,10 +610,16 @@ def add_parcel_feature(
     """
     key = parcel_info.get("ozet") or f"{parcel_info.get('mahalle')}_{parcel_info.get('ada_no')}_{parcel_info.get('parsel_no')}"
 
-    # Check for existing feature
-    for ft in layer.getFeatures():
-        if str(ft["ozet"] or "").strip() == key.strip():
-            return False, f"Parsel {key} zaten katmanda mevcut.", ft
+    # Fast indexed / filtered check for existing feature (without fetching geometries)
+    safe_key = str(key).replace("'", "''")
+    req = (
+        QgsFeatureRequest()
+        .setFilterExpression(f'"ozet" = \'{safe_key}\'')
+        .setFlags(QgsFeatureRequest.Flag.NoGeometry)
+        .setLimit(1)
+    )
+    for ft in layer.getFeatures(req):
+        return False, f"Parsel {key} zaten katmanda mevcut.", ft
 
     geom = parcel_info.get("geometry")
     if geom is None or geom.isEmpty():
@@ -694,7 +715,7 @@ class InteractiveCadastreTool(QgsMapTool):
                     self.canvas.flashGeometries([info["geometry"]], crs=wgs_crs)
 
             # Select feature in layer
-            if feat is not None and feat.id():
+            if feat is not None and feat.id() is not None:
                 layer.selectByIds([feat.id()])
 
             summary = (

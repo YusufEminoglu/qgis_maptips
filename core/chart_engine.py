@@ -19,8 +19,10 @@ def build_progress_bar_table(
     """Return a 100% width Qt-safe HTML progress bar using nested table cells."""
     safe_val = val_expr.strip()
     safe_max = max_val_expr.strip()
-    pct_expr = f"clamp(0.0, round(100.0 * (coalesce({safe_val}, 0)) / (nullif({safe_max}, 0)), 1), 100.0)"
-    rem_expr = f"(100.0 - {pct_expr})"
+    num_val = f"coalesce(try(to_real({safe_val}), 0.0), 0.0)"
+    num_max = f"coalesce(try(to_real({safe_max}), 100.0), 100.0)"
+    pct_expr = f"coalesce(clamp(0.0, round(100.0 * ({num_val}) / (nullif({num_max}, 0.0)), 1), 100.0), 0.0)"
+    rem_expr = f"coalesce(100.0 - ({pct_expr}), 100.0)"
 
     label_row = ""
     if show_label:
@@ -110,10 +112,11 @@ def build_svg_donut_data_uri(
         safe_clr = color.replace("#", "%23")
         safe_val = f"coalesce(try(to_real({expr}), 0.0), 0.0)"
         pct = f"coalesce(clamp(0.0, round(100.0 * ({safe_val}) / (nullif({total_expr}, 0.0)), 1), 100.0), 0.0)"
+        dash_combined = f"with_variable('p', {pct}, @p || ' ' || (100.0 - @p))"
         circles.append(
             f'<circle cx="{cx}" cy="{cy}" r="{r}" fill="none" stroke="{safe_clr}" '
             f'stroke-width="{stroke_width/4.0:.1f}" '
-            f'stroke-dasharray="[% {pct} %] [% 100.0 - ({pct}) %]" '
+            f'stroke-dasharray="[% {dash_combined} %]" '
             f'stroke-dashoffset="[% coalesce({offset_expr}, 25.0) %]"/>'
         )
         offset_expr = f"({offset_expr} - ({pct}))"
@@ -143,18 +146,19 @@ def build_svg_sparkline(
     bar_w = max(4.0, step - 3.0)
 
     # Use QGIS max() expression (NOT greatest) with numeric coercion and safe minimum floor
-    field_coalesced = [f'coalesce(try(to_real("{f}"), 0.0), 0.0)' for f in fields]
+    clean_fields = [f.strip('"') for f in fields]
+    field_coalesced = [f'coalesce(try(to_real("{f}"), 0.0), 0.0)' for f in clean_fields]
     max_expr = f"max(0.001, {', '.join(field_coalesced)})"
 
     safe_bar_clr = bar_color.replace("#", "%23")
     safe_bg_clr = bg_color.replace("#", "%23")
 
     bars = []
-    for idx, f in enumerate(fields):
+    for idx, f in enumerate(clean_fields):
         x = idx * step + 1.5
         val_expr = f'coalesce(try(to_real("{f}"), 0.0), 0.0)'
-        h_expr = f"clamp(2.0, round({height - 4} * ({val_expr}) / (nullif({max_expr}, 0.0)), 1), {height - 4})"
-        y_expr = f"({height - 2} - {h_expr})"
+        h_expr = f"coalesce(clamp(2.0, round({height - 4} * ({val_expr}) / (nullif({max_expr}, 0.0)), 1), {height - 4}), 2.0)"
+        y_expr = f"coalesce({height - 2} - ({h_expr}), {height - 4})"
 
         bars.append(
             f'<rect x="{x:.1f}" y="[% {y_expr} %]" width="{bar_w:.1f}" height="[% {h_expr} %]" '

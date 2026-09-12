@@ -45,7 +45,7 @@ class TestChartEngine(unittest.TestCase):
     def test_progress_bar_table(self):
         html = build_progress_bar_table('"capacity"', '100', bar_color="#10b981")
         self.assertIn('<table width="100%"', html)
-        self.assertIn('clamp(0.0, round(100.0 * (coalesce("capacity", 0))', html)
+        self.assertIn('clamp(0.0, round(100.0 * (coalesce(try(to_real("capacity"), 0.0)', html)
         self.assertIn('bgcolor="#10b981"', html)
 
     def test_segmented_bar_table(self):
@@ -106,8 +106,9 @@ class TestTemplateEngine(unittest.TestCase):
     def test_safe_attribute_expr(self):
         expr = build_safe_attribute_expr("area", format_numbers=True, decimal_places=2, null_text="—")
         self.assertIn('"area" IS NULL', expr)
-        self.assertIn('format_number(to_real("area"), 0)', expr)
-        self.assertIn('format_number(to_real("area"), 2)', expr)
+        self.assertIn("with_variable('v'", expr)
+        self.assertIn('format_number(@v, 0)', expr)
+        self.assertIn('format_number(@v, 2)', expr)
         self.assertIn("'—'", expr)
 
         raw_expr = build_safe_attribute_expr("notes", format_numbers=False, null_text="N/A")
@@ -168,7 +169,7 @@ class TestTemplateEngine(unittest.TestCase):
             "label": "Building Count",
         }
         row_html = build_relational_metric_row(metric, {"text_secondary": "#64748b", "accent": "#10b981", "border": "#ccc"}, "#fff")
-        self.assertIn("overlay_intersects('buildings', count:=\"id\")", row_html)
+        self.assertIn("array_length(overlay_intersects('buildings'))", row_html)
         self.assertIn("Building Count", row_html)
 
     def test_preset_serialization_roundtrip(self):
@@ -246,7 +247,8 @@ class TestActionBuilder(unittest.TestCase):
     def test_select_intersecting_action(self):
         act = build_select_intersecting_action("Parcels")
         self.assertIn("mapLayersByName('Parcels')", act["command"])
-        self.assertIn("intersects(feat.geometry())", act["command"])
+        self.assertIn("f.geometry().intersects(geom)", act["command"])
+        self.assertIn("QgsCoordinateTransform", act["command"])
 
     def test_custom_url_action(self):
         act = build_custom_url_action("ERP Portal", "https://erp.corp/item/[% \"id\" %]")

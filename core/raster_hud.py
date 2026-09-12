@@ -14,9 +14,11 @@ from qgis.PyQt.QtCore import QEvent, QObject, QPoint, QRect, Qt, QTimer, pyqtSig
 from qgis.PyQt.QtGui import QColor, QCursor, QPainter, QPen, QPixmap
 from qgis.PyQt.QtWidgets import QToolTip
 from qgis.core import (
+    QgsCoordinateTransform,
     QgsFeatureRequest,
     QgsGeometry,
     QgsPointXY,
+    QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
 )
@@ -268,12 +270,14 @@ class CanvasHoverHUD(QObject):
         return super().eventFilter(watched, event)
 
     def _on_debounce_timeout(self) -> None:
-        if not self._is_active or (not self._active_raster_layers and not self._active_vector_layer):
+        if not self._hud_enabled or (not self._active_raster_layers and not self._active_vector_layer):
             return
         if self._pinned:
             return
 
+        canvas_crs = self.canvas.mapSettings().destinationCrs()
         map_pt = self.canvas.getCoordinateTransform().toMapCoordinates(self._last_screen_pos)
+        project = QgsProject.instance()
 
         # Composite HUD Builder
         hud_lines = [
@@ -292,9 +296,26 @@ class CanvasHoverHUD(QObject):
         # 1. Vector Inspection (if enabled)
         if self._active_vector_layer and self._active_vector_layer.isValid():
             vlayer = self._active_vector_layer
-            pt_geom = QgsGeometry.fromPointXY(map_pt)
+            vlayer_crs = vlayer.crs()
+            if vlayer_crs != canvas_crs and canvas_crs.isValid() and vlayer_crs.isValid():
+                tr_v = QgsCoordinateTransform(canvas_crs, vlayer_crs, project)
+                v_pt = map_pt
+                with contextlib.suppress(Exception):
+                    v_pt = tr_v.transform(map_pt)
+            else:
+                v_pt = map_pt
+
+            pt_geom = QgsGeometry.fromPointXY(v_pt)
             tol = self.canvas.mapUnitsPerPixel() * 4
-            req = QgsFeatureRequest().setFilterRect(pt_geom.buffer(tol, 4).boundingBox())
+            if vlayer_crs.isGeographic() and not canvas_crs.isGeographic():
+                tol = tol / 111320.0
+
+            req = (
+                QgsFeatureRequest()
+                .setFilterRect(pt_geom.buffer(tol, 4).boundingBox())
+                .setSubsetOfAttributes([0])
+                .setLimit(1)
+            )
             matched_feature = None
             for feat in vlayer.getFeatures(req):
                 if feat.geometry().intersects(pt_geom) or feat.geometry().distance(pt_geom) <= tol:
@@ -311,7 +332,18 @@ class CanvasHoverHUD(QObject):
 
         # 2. Raster Layer(s) Sampling
         for rlayer in self._active_raster_layers:
-            if not rlayer.extent().contains(map_pt):
+            rlayer_crs = rlayer.crs()
+            if rlayer_crs != canvas_crs and canvas_crs.isValid() and rlayer_crs.isValid():
+                tr_r = QgsCoordinateTransform(canvas_crs, rlayer_crs, project)
+                sample_pt = None
+                with contextlib.suppress(Exception):
+                    sample_pt = tr_r.transform(map_pt)
+                if sample_pt is None:
+                    continue
+            else:
+                sample_pt = map_pt
+
+            if not rlayer.extent().contains(sample_pt):
                 continue
 
             provider = rlayer.dataProvider()
@@ -326,7 +358,7 @@ class CanvasHoverHUD(QObject):
 
             band_count = min(4, rlayer.bandCount())
             for b in range(1, band_count + 1):
-                val, ok = provider.sample(map_pt, b)
+                val, ok = provider.sample(sample_pt, b)
                 val_str = f"{val:.2f}" if (ok and val is not None and isinstance(val, (int, float))) else "NoData"
                 hud_lines.append(
                     f'<tr><td width="55%" style="color:#cbd5e1; font-size:9.5px; padding:3px 8px; border-bottom:1px solid #1e293b;">'
