@@ -3,11 +3,11 @@ name=Qgis Advanced Map Tips&Actions
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 description=Advanced Map Tips and Actions Studio for vector and raster layers with Qt-safe HTML cards, inline charts, and 1-click web/spatial actions.
-version=0.1.0
+version=0.1.1
 author=Yusuf Eminoglu
 email=yusuf.eminoglu@deu.edu.tr
 
-about=
+about=Interactive HTML MapTips, micro-charts (progress bars, SVG donuts, sparklines), one-click dynamic spatial actions, and live raster HUD inspection for QGIS. Online User Manual & Documentation: https://geophilo.com/qgis_maptips/ | If you find this plugin helpful, please consider starring the repository on GitLab (https://gitlab.com/geophilo1/qgis_maptips)!
     Qgis Advanced Map Tips&Actions is an advanced Map Tips and Actions Studio designed for both vector and raster layers in QGIS 3.28+ and QGIS 4.
     It bridges the gap between raw attribute tables and modern interactive map exploration by providing a palette-aware, dockable card designer, zero-dependency micro-charts, and a 1-click action library.
     
@@ -33,4 +33,5 @@ hasProcessingProvider=yes
 license=GPL-3
 
 changelog=
+    0.1.1 - Upgraded official plugin icon to high-end tactile 3D brand identity with circular teal pedestal; synchronized documentation, repository and issue tracker endpoints to GeoPhilo and GitLab.
     0.1.0 - Initial release: dockable palette-aware card studio, 5 universal layout archetypes, inline SVG donut and table bar charts, dynamic CRS action builder, and live canvas HUD inspector.

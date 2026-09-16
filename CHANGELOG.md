@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.1.1] - 2026-09-17
+
+- Upgraded official plugin icon to high-end tactile 3D brand identity (isometric 45°, slim teal pedestal, full bleed transparent canvas).
+- Synchronized documentation, repository and issue tracker endpoints to GeoPhilo and GitLab.
+
 All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
