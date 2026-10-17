@@ -28,8 +28,8 @@ class ExportLayerCardsReportAlgorithm(QgsProcessingAlgorithm):
     PARAM_COLUMNS = "COLUMNS"
     PARAM_OUTPUT = "OUTPUT"
 
-    PALETTES = ["emerald", "blue", "slate", "crimson", "purple"]
-    PALETTE_NAMES = ["Emerald Studio", "Classic Blue", "Dark Slate", "Crimson Alert", "Modern Purple"]
+    PALETTES = ["emerald", "blue", "slate", "crimson", "purple", "amber"]
+    PALETTE_NAMES = ["Emerald Studio", "Classic Blue", "Dark Slate", "Crimson Alert", "Modern Purple", "Cadastral Amber"]
 
     def name(self) -> str:
         return "export_layer_cards_report"

@@ -308,14 +308,27 @@ def build_card_action_buttons_row(action_keys: list[str], pal: dict[str, str], c
     icons = {
         "google_satellite": "&#127758;",
         "google_streetview": "&#128205;",
+        "google_directions": "&#128663;",
         "openstreetmap": "&#128506;",
+        "osm_id_editor": "&#9998;",
         "yandex_maps": "&#129517;",
+        "bing_aerial": "&#128752;",
+        "mapillary_street": "&#128247;",
         "tkgm_cadastre": "&#127963;",
         "tkgm_api_instant": "&#127963;",
+        "tkgm_instant_download": "&#9889;",
         "copy_clipboard": "&#128203;",
+        "copy_geojson": "&#129516;",
+        "copy_wkt_coords": "&#128208;",
         "export_card_report": "&#128196;",
         "zoom_feature": "&#128269;",
+        "flash_pan_feature": "&#10024;",
         "buffer_feature": "&#9678;",
+        "select_nearby_features": "&#128225;",
+        "extract_feature_layer": "&#128228;",
+        "measure_geometry_summary": "&#128207;",
+        "open_attribute_form": "&#128450;",
+        "wikipedia_geosearch": "&#127757;",
     }
 
     # Normalize keys to deduplicate any legacy tkgm_api_instant and tkgm_cadastre

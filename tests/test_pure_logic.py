@@ -224,13 +224,60 @@ class TestTemplateEngine(unittest.TestCase):
 
 
 class TestActionBuilder(unittest.TestCase):
-    def test_available_actions(self):
-        self.assertGreaterEqual(len(AVAILABLE_ACTIONS), 6)
+    def test_available_actions_22_templates(self):
+        from qgis_maptips.core.action_builder import (
+            ACTION_CATEGORIES,
+            STUDIO_EXPRESSION_TOKENS,
+            export_actions_to_json,
+            get_action_template_by_key,
+            import_actions_from_json,
+        )
+
+        self.assertGreaterEqual(len(AVAILABLE_ACTIONS), 22)
+        self.assertEqual(len(ACTION_CATEGORIES), 5)
+        self.assertGreaterEqual(len(STUDIO_EXPRESSION_TOKENS), 10)
+
         keys = {act["key"] for act in AVAILABLE_ACTIONS}
-        self.assertIn("google_satellite", keys)
-        self.assertIn("google_streetview", keys)
-        self.assertIn("copy_clipboard", keys)
-        self.assertIn("export_card_report", keys)
+        expected_keys = {
+            "google_satellite",
+            "google_streetview",
+            "google_directions",
+            "openstreetmap",
+            "osm_id_editor",
+            "yandex_maps",
+            "bing_aerial",
+            "mapillary_street",
+            "zoom_feature",
+            "flash_pan_feature",
+            "buffer_feature",
+            "select_nearby_features",
+            "extract_feature_layer",
+            "measure_geometry_summary",
+            "copy_clipboard",
+            "copy_geojson",
+            "copy_wkt_coords",
+            "export_card_report",
+            "tkgm_cadastre",
+            "tkgm_instant_download",
+            "open_attribute_form",
+            "wikipedia_geosearch",
+        }
+        self.assertTrue(expected_keys.issubset(keys))
+
+        for k in expected_keys:
+            tpl = get_action_template_by_key(k)
+            self.assertIsNotNone(tpl)
+            self.assertIn(tpl["category"], ACTION_CATEGORIES)
+            self.assertIn(tpl["type"], ("OpenUrl", "GenericPython"))
+            self.assertTrue(len(tpl["command"]) > 10)
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            jpath = os.path.join(tmpdir, "actions_pack.json")
+            cnt = export_actions_to_json(AVAILABLE_ACTIONS[:4], jpath)
+            self.assertEqual(cnt, 4)
+            loaded = import_actions_from_json(jpath)
+            self.assertEqual(len(loaded), 4)
+            self.assertEqual(loaded[0]["name"], AVAILABLE_ACTIONS[0]["name"])
 
     def test_wgs84_expression(self):
         self.assertIn("@layer_crs", LAT_EXPR)
@@ -244,7 +291,7 @@ class TestActionBuilder(unittest.TestCase):
 
     def test_select_intersecting_action(self):
         act = build_select_intersecting_action("Parcels")
-        self.assertIn("mapLayersByName('Parcels')", act["command"])
+        self.assertIn("mapLayersByName(TARGET_LAYER_NAME)", act["command"])
         self.assertIn("f.geometry().intersects(geom)", act["command"])
         self.assertIn("QgsCoordinateTransform", act["command"])
 
@@ -281,7 +328,6 @@ class TestActionBuilder(unittest.TestCase):
         buf_act = actions_map["buffer_feature"]
         self.assertIn("Feature Buffers (Temp)", buf_act["command"])
         self.assertIn("insertLayer", buf_act["command"])
-
 
     def test_card_action_buttons_row_wrapping(self):
         # When 6 buttons are given, they should wrap into rows of max 3 (i.e. at least 2 <tr> rows)

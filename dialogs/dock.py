@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -13,6 +14,7 @@ from qgis.PyQt.QtWidgets import (
     QColorDialog,
     QComboBox,
     QDockWidget,
+    QDoubleSpinBox,
     QFileDialog,
     QFormLayout,
     QFrame,
@@ -52,11 +54,19 @@ from qgis.core import (
 )
 
 from ..core.action_builder import (
+    ACTION_CATEGORIES,
     AVAILABLE_ACTIONS,
+    STUDIO_EXPRESSION_TOKENS,
     apply_actions_to_layer,
     create_feature_buffer,
+    execute_template_or_layer_action,
+    export_actions_to_json,
+    get_action_template_by_key,
     get_layer_actions,
+    import_actions_from_json,
+    inject_or_update_custom_action,
     is_layer_alive,
+    remove_action_by_id,
     remove_all_actions,
     zoom_to_feature,
 )
@@ -270,14 +280,19 @@ class QgisMapTipsDock(QDockWidget):
         # Tab 1: MapTip Designer
         tab_designer = QWidget()
         self._build_designer_tab(tab_designer)
-        self.tabs.addTab(tab_designer, "MapTip Designer")
+        self.tabs.addTab(tab_designer, "🎨 Card Designer")
 
-        # Tab 2: Actions Hub
+        # Tab 2: Actions Hub (Batch Library & Inventory)
         tab_actions = QWidget()
         self._build_actions_tab(tab_actions)
-        self.tabs.addTab(tab_actions, "Actions Hub")
+        self.tabs.addTab(tab_actions, "⚡ Actions Hub")
 
-        # Tab 3: Interactive Canvas Pin & Inspect
+        # Tab 3: Interactive Action Studio (22 Templates & Code Customizer)
+        tab_studio = QWidget()
+        self._build_action_studio_tab(tab_studio)
+        self.tabs.addTab(tab_studio, "🛠️ Action Studio")
+
+        # Tab 4: Interactive Canvas Pin & Inspect
         tab_hud = QWidget()
         self._build_hud_tab(tab_hud)
         self.tabs.addTab(tab_hud, "📌 Pin & Inspect")
@@ -669,24 +684,103 @@ class QgisMapTipsDock(QDockWidget):
         layout.setContentsMargins(6, 6, 6, 6)
         layout.setSpacing(5)
 
-        # 1. Collapsible: Action Library
-        self.sec_actions = CollapsibleSection("⚡ 1-Click Action Library", initially_expanded=True)
+        cursor = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
+
+        # 1. Collapsible: Action Library (22 Templates with Category Filter & Quick Selection)
+        self.sec_actions = CollapsibleSection(f"⚡ 1-Click Action Library ({len(AVAILABLE_ACTIONS)} Templates)", initially_expanded=True)
         act_box = QVBoxLayout()
         act_box.setContentsMargins(4, 4, 4, 4)
         act_box.setSpacing(4)
 
+        # Category Filter & Quick Selection Toolbar
+        filter_row = QHBoxLayout()
+        filter_row.setSpacing(3)
+        self.hub_cat_combo = QComboBox()
+        self.hub_cat_combo.addItem(f"All Categories ({len(AVAILABLE_ACTIONS)})", "ALL")
+        for cat in ACTION_CATEGORIES:
+            cnt = sum(1 for a in AVAILABLE_ACTIONS if a.get("category") == cat)
+            self.hub_cat_combo.addItem(f"{cat} ({cnt})", cat)
+        self.hub_cat_combo.currentIndexChanged.connect(self._on_hub_category_filter_changed)
+        filter_row.addWidget(self.hub_cat_combo, 1)
+
+        btn_sel_core = QPushButton("Core (6)")
+        btn_sel_core.setObjectName("quietButton")
+        btn_sel_core.setToolTip("Select the 6 essential everyday actions")
+        btn_sel_core.clicked.connect(self._on_hub_select_core)
+        filter_row.addWidget(btn_sel_core)
+
+        btn_sel_all = QPushButton("All")
+        btn_sel_all.setObjectName("quietButton")
+        btn_sel_all.setToolTip("Check all visible action templates")
+        btn_sel_all.clicked.connect(lambda: self._on_hub_set_visible_checked(True))
+        filter_row.addWidget(btn_sel_all)
+
+        btn_sel_none = QPushButton("None")
+        btn_sel_none.setObjectName("quietButton")
+        btn_sel_none.setToolTip("Uncheck all visible action templates")
+        btn_sel_none.clicked.connect(lambda: self._on_hub_set_visible_checked(False))
+        filter_row.addWidget(btn_sel_none)
+        act_box.addLayout(filter_row)
+
+        # Scrollable Checkbox List so 22 templates fit compactly
+        cb_scroll = QScrollArea()
+        cb_scroll.setWidgetResizable(True)
+        cb_scroll.setMinimumHeight(145)
+        cb_scroll.setMaximumHeight(195)
+        cb_scroll.setStyleSheet(
+            "QScrollArea { border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; }"
+        )
+        cb_container = QWidget()
+        cb_layout = QVBoxLayout(cb_container)
+        cb_layout.setContentsMargins(6, 4, 6, 4)
+        cb_layout.setSpacing(3)
+
         self.action_checkboxes: dict[str, QCheckBox] = {}
+        self.action_row_widgets: dict[str, QWidget] = {}
+        core_defaults = {
+            "google_satellite",
+            "google_streetview",
+            "tkgm_cadastre",
+            "zoom_feature",
+            "copy_clipboard",
+            "export_card_report",
+        }
         for item in AVAILABLE_ACTIONS:
-            cb = QCheckBox(item["name"])
-            cb.setToolTip(item["description"])
-            cb.setChecked(item["key"] in ("google_satellite", "google_streetview", "tkgm_cadastre", "copy_clipboard", "export_card_report"))
-            act_box.addWidget(cb)
+            row_w = QWidget()
+            row_h = QHBoxLayout(row_w)
+            row_h.setContentsMargins(0, 0, 0, 0)
+            row_h.setSpacing(4)
+
+            icon_str = item.get("icon", "⚡")
+            type_badge = "URL" if item.get("type") == "OpenUrl" else "Py"
+            cb = QCheckBox(f"{icon_str} {item['name']} [{type_badge}]")
+            cb.setToolTip(f"{item['description']}\nCategory: {item.get('category', '')}")
+            cb.setChecked(item["key"] in core_defaults)
+            cb.toggled.connect(self._schedule_preview_update)
+
+            btn_customize = QPushButton("✏️")
+            btn_customize.setFixedSize(22, 20)
+            btn_customize.setObjectName("quietButton")
+            btn_customize.setToolTip(f"Open '{item['name']}' in Action Studio to inspect or revise its code/URL")
+            if cursor is not None:
+                btn_customize.setCursor(cursor)
+            btn_customize.clicked.connect(lambda _, k=item["key"]: self._open_template_in_studio(k))
+
+            row_h.addWidget(cb, 1)
+            row_h.addWidget(btn_customize)
+            cb_layout.addWidget(row_w)
+
             self.action_checkboxes[item["key"]] = cb
+            self.action_row_widgets[item["key"]] = row_w
+
+        cb_layout.addStretch()
+        cb_scroll.setWidget(cb_container)
+        act_box.addWidget(cb_scroll)
 
         # Open File Option
         file_box = QHBoxLayout()
         file_box.setSpacing(4)
-        self.cb_open_file = QCheckBox("Open File/Link:")
+        self.cb_open_file = QCheckBox("📂 Open File/Link Field:")
         self.cb_open_file.setToolTip("Open local file path or URL stored in an attribute")
         self.file_field_combo = QComboBox()
         file_box.addWidget(self.cb_open_file)
@@ -696,7 +790,7 @@ class QgisMapTipsDock(QDockWidget):
         # Select Intersecting in Another Layer
         sel_box = QHBoxLayout()
         sel_box.setSpacing(4)
-        self.cb_sel_intersect = QCheckBox("Select Intersecting:")
+        self.cb_sel_intersect = QCheckBox("🔗 Select Intersecting:")
         self.cb_sel_intersect.setToolTip("Select intersecting features in target layer upon click")
         self.sel_layer_combo = QComboBox()
         sel_box.addWidget(self.cb_sel_intersect)
@@ -705,7 +799,6 @@ class QgisMapTipsDock(QDockWidget):
 
         self.inject_actions_btn = QPushButton("⚡ Inject Selected Actions into Layer")
         self.inject_actions_btn.setObjectName("primaryAction")
-        cursor = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
         if cursor is not None:
             self.inject_actions_btn.setCursor(cursor)
         self.inject_actions_btn.clicked.connect(self._apply_actions)
@@ -725,33 +818,48 @@ class QgisMapTipsDock(QDockWidget):
         inv_box.addWidget(self.active_actions_header)
 
         self.active_actions_list = QListWidget()
-        self.active_actions_list.setMaximumHeight(85)
+        self.active_actions_list.setMaximumHeight(105)
+        self.active_actions_list.setToolTip("Double-click any action to load and revise it in the Action Studio tab")
         self.active_actions_list.setStyleSheet(
             "QListWidget { border: 1px solid #cbd5e1; border-radius: 4px; background: #ffffff; padding: 2px; font-size: 8pt; }"
             "QListWidget::item { padding: 3px 5px; border-bottom: 1px solid #f1f5f9; }"
             "QListWidget::item:selected { background: #0f766e; color: #ffffff; border-radius: 3px; }"
         )
+        self.active_actions_list.itemDoubleClicked.connect(lambda _: self._on_edit_selected_layer_action_in_studio())
         inv_box.addWidget(self.active_actions_list)
 
         inv_btn_row = QHBoxLayout()
-        inv_btn_row.setSpacing(4)
-        self.btn_run_action = QPushButton("▶ Run on Feature")
+        inv_btn_row.setSpacing(3)
+        self.btn_run_action = QPushButton("▶ Run")
         self.btn_run_action.setObjectName("quietButton")
         self.btn_run_action.setToolTip("Run selected action using the current sample feature")
         self.btn_run_action.clicked.connect(self._on_run_selected_action)
 
-        self.btn_activate_qgis_tool = QPushButton("🎯 Canvas Action Tool")
+        self.btn_edit_in_studio = QPushButton("✏️ Revise in Studio")
+        self.btn_edit_in_studio.setObjectName("quietButton")
+        self.btn_edit_in_studio.setToolTip("Load selected layer action into Action Studio to inspect or edit its code/URL")
+        self.btn_edit_in_studio.clicked.connect(self._on_edit_selected_layer_action_in_studio)
+
+        self.btn_activate_qgis_tool = QPushButton("🎯 Canvas Tool")
         self.btn_activate_qgis_tool.setObjectName("quietButton")
         self.btn_activate_qgis_tool.setToolTip("Activate QGIS canvas 'Run Feature Action' tool to click map features")
         self.btn_activate_qgis_tool.clicked.connect(self._on_activate_qgis_action_tool)
 
-        self.btn_clear_actions = QPushButton("🗑 Clear Actions")
+        self.btn_delete_single_action = QPushButton("✕")
+        self.btn_delete_single_action.setFixedWidth(26)
+        self.btn_delete_single_action.setObjectName("quietButton")
+        self.btn_delete_single_action.setToolTip("Delete only the selected action from the active layer")
+        self.btn_delete_single_action.clicked.connect(self._on_delete_selected_layer_action)
+
+        self.btn_clear_actions = QPushButton("🗑 Clear All")
         self.btn_clear_actions.setObjectName("quietButton")
-        self.btn_clear_actions.setToolTip("Remove actions from the active layer")
+        self.btn_clear_actions.setToolTip("Remove all actions from the active layer")
         self.btn_clear_actions.clicked.connect(self._on_clear_layer_actions)
 
         inv_btn_row.addWidget(self.btn_run_action)
+        inv_btn_row.addWidget(self.btn_edit_in_studio)
         inv_btn_row.addWidget(self.btn_activate_qgis_tool)
+        inv_btn_row.addWidget(self.btn_delete_single_action)
         inv_btn_row.addWidget(self.btn_clear_actions)
         inv_box.addLayout(inv_btn_row)
 
@@ -821,7 +929,7 @@ class QgisMapTipsDock(QDockWidget):
         guide_layout.setSpacing(2)
         guide_item1 = QLabel("1. <b>Inside MapTip:</b> Hover feature on canvas, click action pills directly.")
         guide_item1.setStyleSheet("font-size: 7.5pt; color: #475569;")
-        guide_item2 = QLabel("2. <b>On Canvas:</b> Click '🎯 Canvas Action Tool' and click any feature on map.")
+        guide_item2 = QLabel("2. <b>On Canvas:</b> Click '🎯 Canvas Tool' and click any feature on map.")
         guide_item2.setStyleSheet("font-size: 7.5pt; color: #475569;")
         guide_item3 = QLabel("3. <b>In Tables:</b> Right-click any row in Attribute Table or Identify dialog.")
         guide_item3.setStyleSheet("font-size: 7.5pt; color: #475569;")
@@ -834,6 +942,260 @@ class QgisMapTipsDock(QDockWidget):
         layout.addStretch()
         scroll.setWidget(scroll_content)
         outer_layout.addWidget(scroll)
+
+    def _build_action_studio_tab(self, parent: QWidget) -> None:
+        """Build the interactive Action Studio tab for browsing 22 templates and revising/creating QGIS actions."""
+        outer_layout = QVBoxLayout(parent)
+        outer_layout.setContentsMargins(0, 0, 0, 0)
+        outer_layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+        scroll_content = QWidget()
+        layout = QVBoxLayout(scroll_content)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(6)
+
+        cursor = getattr(getattr(Qt, "CursorShape", Qt), "PointingHandCursor", None)
+
+        # 1. Collapsible: Template Gallery & Selector (22 Ready-to-Use Templates)
+        self.sec_studio_gallery = CollapsibleSection(
+            f"📚 1. Action Template Gallery ({len(AVAILABLE_ACTIONS)} Templates)", initially_expanded=True
+        )
+        gal_layout = QVBoxLayout()
+        gal_layout.setContentsMargins(4, 4, 4, 4)
+        gal_layout.setSpacing(4)
+
+        cat_row = QHBoxLayout()
+        cat_row.setSpacing(4)
+        cat_lbl = QLabel("Category:")
+        cat_lbl.setStyleSheet("font-size: 8pt; font-weight: bold;")
+        self.studio_cat_combo = QComboBox()
+        self.studio_cat_combo.addItem(f"All Categories ({len(AVAILABLE_ACTIONS)})", "ALL")
+        for cat in ACTION_CATEGORIES:
+            cnt = sum(1 for a in AVAILABLE_ACTIONS if a.get("category") == cat)
+            self.studio_cat_combo.addItem(f"{cat} ({cnt})", cat)
+        self.studio_cat_combo.currentIndexChanged.connect(self._on_studio_category_changed)
+        cat_row.addWidget(cat_lbl)
+        cat_row.addWidget(self.studio_cat_combo, 1)
+        gal_layout.addLayout(cat_row)
+
+        tpl_row = QHBoxLayout()
+        tpl_row.setSpacing(4)
+        tpl_lbl = QLabel("Template:")
+        tpl_lbl.setStyleSheet("font-size: 8pt; font-weight: bold;")
+        self.studio_tpl_combo = QComboBox()
+        self.studio_tpl_combo.currentIndexChanged.connect(self._on_studio_template_selected)
+        tpl_row.addWidget(tpl_lbl)
+        tpl_row.addWidget(self.studio_tpl_combo, 1)
+        gal_layout.addLayout(tpl_row)
+
+        self.studio_desc_lbl = QLabel("")
+        self.studio_desc_lbl.setWordWrap(True)
+        self.studio_desc_lbl.setStyleSheet(
+            "background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 4px; "
+            "padding: 4px 6px; color: #166534; font-size: 7.5pt;"
+        )
+        gal_layout.addWidget(self.studio_desc_lbl)
+
+        tpl_btns = QHBoxLayout()
+        tpl_btns.setSpacing(4)
+        self.btn_studio_reset = QPushButton("🔄 Reset Default")
+        self.btn_studio_reset.setObjectName("quietButton")
+        self.btn_studio_reset.setToolTip("Restore the selected template's default script/URL")
+        self.btn_studio_reset.clicked.connect(self._on_studio_reset_template)
+
+        self.btn_studio_load_layer = QPushButton("📥 Load from Layer")
+        self.btn_studio_load_layer.setObjectName("quietButton")
+        self.btn_studio_load_layer.setToolTip("Load the currently selected action from Layer Actions Inventory into the editor")
+        self.btn_studio_load_layer.clicked.connect(self._on_edit_selected_layer_action_in_studio)
+
+        self.btn_studio_blank = QPushButton("➕ Blank Action")
+        self.btn_studio_blank.setObjectName("quietButton")
+        self.btn_studio_blank.setToolTip("Start a clean custom Python or URL action from scratch")
+        self.btn_studio_blank.clicked.connect(self._on_studio_new_blank)
+
+        tpl_btns.addWidget(self.btn_studio_reset)
+        tpl_btns.addWidget(self.btn_studio_load_layer)
+        tpl_btns.addWidget(self.btn_studio_blank)
+        gal_layout.addLayout(tpl_btns)
+
+        self.sec_studio_gallery.add_layout(gal_layout)
+        layout.addWidget(self.sec_studio_gallery)
+
+        # 2. Collapsible: Action Identity, Type, Scopes & Quick Parameter Tweak
+        self.sec_studio_meta = CollapsibleSection("⚙️ 2. Action Identity, Scopes & Quick Parameter", initially_expanded=True)
+        meta_form = QFormLayout()
+        meta_form.setContentsMargins(4, 4, 4, 4)
+        meta_form.setSpacing(4)
+
+        self.studio_name_edit = QLineEdit()
+        self.studio_name_edit.setPlaceholderText("e.g., Buffer Feature (250m Protection Zone)")
+        self.studio_name_edit.setToolTip("Full display name shown in QGIS right-click & action menus")
+        meta_form.addRow("Action Name:", self.studio_name_edit)
+
+        type_short_row = QHBoxLayout()
+        type_short_row.setSpacing(4)
+        self.studio_short_edit = QLineEdit()
+        self.studio_short_edit.setPlaceholderText("Short Label (e.g., Buffer 250m)")
+        self.studio_short_edit.setToolTip("Compact button label used in MapTip action pills and toolbars")
+        self.studio_type_combo = QComboBox()
+        self.studio_type_combo.addItem("🐍 PyQGIS Script", "GenericPython")
+        self.studio_type_combo.addItem("🌐 Open URL / File", "OpenUrl")
+        self.studio_type_combo.currentIndexChanged.connect(self._update_studio_eval_preview)
+        type_short_row.addWidget(self.studio_short_edit, 1)
+        type_short_row.addWidget(self.studio_type_combo)
+        meta_form.addRow("Short / Type:", type_short_row)
+
+        # Scopes row
+        scopes_row = QHBoxLayout()
+        scopes_row.setSpacing(6)
+        self.studio_scope_cbs: dict[str, QCheckBox] = {}
+        for sc in ("Canvas", "Feature", "Field", "Layer", "Form"):
+            sc_cb = QCheckBox(sc)
+            sc_cb.setChecked(True)
+            sc_cb.setStyleSheet("font-size: 7.5pt;")
+            scopes_row.addWidget(sc_cb)
+            self.studio_scope_cbs[sc] = sc_cb
+        scopes_row.addStretch()
+        meta_form.addRow("Scopes:", scopes_row)
+
+        # Quick numeric parameter adjuster (for Buffer distance, Search radius, Zoom level, etc.)
+        param_row = QHBoxLayout()
+        param_row.setSpacing(4)
+        self.studio_param_spin = QDoubleSpinBox()
+        self.studio_param_spin.setRange(1.0, 100000.0)
+        self.studio_param_spin.setDecimals(1)
+        self.studio_param_spin.setValue(50.0)
+        self.studio_param_spin.setToolTip("Quickly revise numeric parameter (Buffer m, Search Radius m, or Map Zoom 1-21) in code")
+        self.btn_studio_apply_param = QPushButton("⚡ Update Value in Code")
+        self.btn_studio_apply_param.setObjectName("quietButton")
+        self.btn_studio_apply_param.setToolTip("Automatically replaces BUFFER_DIST_M, SEARCH_RADIUS_M, POINT_PAD_M, or zoom level in the editor below")
+        self.btn_studio_apply_param.clicked.connect(self._on_studio_apply_numeric_param)
+        param_row.addWidget(self.studio_param_spin, 1)
+        param_row.addWidget(self.btn_studio_apply_param)
+        meta_form.addRow("Quick Param:", param_row)
+
+        self.sec_studio_meta.add_layout(meta_form)
+        layout.addWidget(self.sec_studio_meta)
+
+        # 3. Collapsible: Dynamic Field & Expression Token Inserter + Code Editor
+        self.sec_studio_code = CollapsibleSection("💻 3. Revise Code / URL & Insert Layer Fields", initially_expanded=True)
+        code_box = QVBoxLayout()
+        code_box.setContentsMargins(4, 4, 4, 4)
+        code_box.setSpacing(4)
+
+        # Field Inserter Row
+        fld_ins_row = QHBoxLayout()
+        fld_ins_row.setSpacing(4)
+        self.studio_field_combo = QComboBox()
+        self.studio_field_combo.setToolTip("Select an attribute field from the active vector layer to insert into your action")
+        self.btn_studio_insert_fld = QPushButton('+ Insert [% "field" %]')
+        self.btn_studio_insert_fld.setObjectName("quietButton")
+        self.btn_studio_insert_fld.setToolTip("Insert the selected layer attribute expression at the cursor position")
+        self.btn_studio_insert_fld.clicked.connect(self._on_studio_insert_field_token)
+        fld_ins_row.addWidget(self.studio_field_combo, 1)
+        fld_ins_row.addWidget(self.btn_studio_insert_fld)
+        code_box.addLayout(fld_ins_row)
+
+        # Spatial Token Inserter Row
+        tok_ins_row = QHBoxLayout()
+        tok_ins_row.setSpacing(4)
+        self.studio_token_combo = QComboBox()
+        for label_txt, expr_txt, desc_txt in STUDIO_EXPRESSION_TOKENS:
+            self.studio_token_combo.addItem(f"🧩 {label_txt}", expr_txt)
+            idx = self.studio_token_combo.count() - 1
+            self.studio_token_combo.setItemData(idx, desc_txt, Qt.ItemDataRole.ToolTipRole)
+        self.btn_studio_insert_tok = QPushButton("+ Insert Spatial Token")
+        self.btn_studio_insert_tok.setObjectName("quietButton")
+        self.btn_studio_insert_tok.setToolTip("Insert selected CRS/geometry/feature expression at the cursor position")
+        self.btn_studio_insert_tok.clicked.connect(self._on_studio_insert_spatial_token)
+        tok_ins_row.addWidget(self.studio_token_combo, 1)
+        tok_ins_row.addWidget(self.btn_studio_insert_tok)
+        code_box.addLayout(tok_ins_row)
+
+        # Editable Code / URL Box
+        code_lbl = QLabel("<b>Editable Python Script or URL Template:</b> (freely revise parameters, URLs, or PyQGIS logic)")
+        code_lbl.setStyleSheet("font-size: 7.5pt; color: #334155;")
+        code_box.addWidget(code_lbl)
+
+        self.studio_code_edit = QPlainTextEdit()
+        self.studio_code_edit.setMinimumHeight(140)
+        self.studio_code_edit.setMaximumHeight(220)
+        self.studio_code_edit.setStyleSheet(
+            "QPlainTextEdit { font-family: Consolas, 'JetBrains Mono', 'Courier New', monospace; "
+            "font-size: 8pt; background: #0f172a; color: #e2e8f0; border: 1px solid #334155; border-radius: 4px; padding: 4px; }"
+        )
+        self.studio_code_edit.textChanged.connect(self._update_studio_eval_preview)
+        code_box.addWidget(self.studio_code_edit)
+
+        # Evaluated Expression Preview on Sample Feature
+        eval_lbl = QLabel("<b>Live Expression Preview on Sample Feature:</b> (shows how <code>[% ... %]</code> tokens resolve)")
+        eval_lbl.setStyleSheet("font-size: 7.5pt; color: #64748b;")
+        code_box.addWidget(eval_lbl)
+
+        self.studio_eval_box = QPlainTextEdit()
+        self.studio_eval_box.setReadOnly(True)
+        self.studio_eval_box.setMinimumHeight(52)
+        self.studio_eval_box.setMaximumHeight(78)
+        self.studio_eval_box.setStyleSheet(
+            "QPlainTextEdit { font-family: Consolas, monospace; font-size: 7.5pt; "
+            "background: #f8fafc; color: #0f766e; border: 1px solid #cbd5e1; border-radius: 4px; padding: 3px; }"
+        )
+        code_box.addWidget(self.studio_eval_box)
+
+        self.sec_studio_code.add_layout(code_box)
+        layout.addWidget(self.sec_studio_code)
+
+        # 4. Action Studio Execution & Persistence Bar
+        exec_row = QHBoxLayout()
+        exec_row.setSpacing(4)
+
+        self.btn_studio_test = QPushButton("▶ Test Run on Sample")
+        self.btn_studio_test.setObjectName("quietButton")
+        self.btn_studio_test.setToolTip("Test-execute this action right now on the active layer's sample/selected feature")
+        if cursor is not None:
+            self.btn_studio_test.setCursor(cursor)
+        self.btn_studio_test.clicked.connect(self._on_studio_test_run)
+
+        self.btn_studio_inject = QPushButton("⚡ Inject / Update on Layer")
+        self.btn_studio_inject.setObjectName("primaryAction")
+        self.btn_studio_inject.setToolTip("Save or update this revised action in the active vector layer's QgsActionManager")
+        if cursor is not None:
+            self.btn_studio_inject.setCursor(cursor)
+        self.btn_studio_inject.clicked.connect(self._on_studio_inject_action)
+
+        exec_row.addWidget(self.btn_studio_test)
+        exec_row.addWidget(self.btn_studio_inject, 1)
+        layout.addLayout(exec_row)
+
+        # Export / Import JSON Action Pack Row
+        json_row = QHBoxLayout()
+        json_row.setSpacing(4)
+        self.btn_studio_export = QPushButton("💾 Export Actions JSON")
+        self.btn_studio_export.setObjectName("quietButton")
+        self.btn_studio_export.setToolTip("Export current studio action and active layer actions to a shareable JSON file")
+        self.btn_studio_export.clicked.connect(self._on_studio_export_json)
+
+        self.btn_studio_import = QPushButton("📂 Import Actions JSON")
+        self.btn_studio_import.setObjectName("quietButton")
+        self.btn_studio_import.setToolTip("Import custom actions from a JSON file into the active layer and Action Studio")
+        self.btn_studio_import.clicked.connect(self._on_studio_import_json)
+
+        json_row.addWidget(self.btn_studio_export)
+        json_row.addWidget(self.btn_studio_import)
+        layout.addLayout(json_row)
+
+        layout.addStretch()
+        scroll.setWidget(scroll_content)
+        outer_layout.addWidget(scroll)
+
+        # Populate initial studio templates
+        self._populate_studio_template_combo("ALL")
 
     def _build_hud_tab(self, parent: QWidget) -> None:
         outer_layout = QVBoxLayout(parent)
@@ -1290,6 +1652,13 @@ class QgisMapTipsDock(QDockWidget):
             cb.blockSignals(False)
         self.attrs_list.blockSignals(False)
 
+        if hasattr(self, "studio_field_combo"):
+            self.studio_field_combo.blockSignals(True)
+            self.studio_field_combo.clear()
+            for fn in field_names:
+                self.studio_field_combo.addItem(f'🏷️ "{fn}"', fn)
+            self.studio_field_combo.blockSignals(False)
+
         self._refresh_donut_combos_from_layer()
         if self.archetype_combo.currentData() == Archetype.DONUT_CHART:
             layer_fnames = fields.names()
@@ -1645,11 +2014,15 @@ class QgisMapTipsDock(QDockWidget):
             self.preview_box.setHtml(centered_html)
             if hasattr(self, "preview_tabs"):
                 self.preview_tabs.setTabText(0, f"Rendered Card ({config.card_width} px)")
+            if hasattr(self, "_update_studio_eval_preview"):
+                self._update_studio_eval_preview()
             return
 
         if hasattr(self, "feat_nav_lbl"):
             self.feat_nav_lbl.setText("No Vector Layer Selected")
         self._current_sample_feat = None
+        if hasattr(self, "_update_studio_eval_preview"):
+            self._update_studio_eval_preview()
         empty_state_html = (
             '<div align="center" style="margin:20px auto; padding:24px 16px; font-family: -apple-system, BlinkMacSystemFont, \'Segoe UI\', Roboto, sans-serif; text-align: center; color: #64748b;">'
             '<div style="font-size: 36px; margin-bottom: 8px;">🗺️</div>'
@@ -1837,14 +2210,30 @@ class QgisMapTipsDock(QDockWidget):
         cmd = act_data.get("command", "")
         act_type = str(act_data.get("type", ""))
 
-        if "clipboard" in act_name_lower or "copy" in act_name_lower:
+        if "geojson" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "copy_geojson", self.iface)
+        elif "wkt" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "copy_wkt_coords", self.iface)
+        elif "clipboard" in act_name_lower or "copy" in act_name_lower:
             self._copy_attributes_of_sample_feature()
         elif "report" in act_name_lower or "export" in act_name_lower:
             self._export_sample_card_report()
+        elif "flash" in act_name_lower and "pan" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "flash_pan_feature", self.iface)
         elif "zoom" in act_name_lower or act_data.get("key") == "zoom_feature":
             self._zoom_to_sample_feature()
         elif "buffer" in act_name_lower or act_data.get("key") == "buffer_feature":
             self._buffer_sample_feature()
+        elif "nearby" in act_name_lower or "radius" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "select_nearby_features", self.iface)
+        elif "extract" in act_name_lower and "layer" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "extract_feature_layer", self.iface)
+        elif "audit" in act_name_lower or "ellipsoidal" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "measure_geometry_summary", self.iface)
+        elif "attribute form" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "open_attribute_form", self.iface)
+        elif "download official tkgm" in act_name_lower:
+            execute_template_or_layer_action(layer, feat, "tkgm_instant_download", self.iface)
         elif "OpenUrl" in act_type or act_type == "0":
             ctx = QgsExpressionContext()
             ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
@@ -1886,6 +2275,412 @@ class QgisMapTipsDock(QDockWidget):
                 "Qgis MapTips", f"Removed {count} actions from '{layer.name()}'."
             )
 
+    def _on_delete_selected_layer_action(self) -> None:
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer):
+            return
+        selected_items = self.active_actions_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "Qgis MapTips", "Select an action in the inventory list to remove.")
+            return
+        act_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        if act_data and remove_action_by_id(layer, act_data.get("id") or act_data.get("name")):
+            self._refresh_active_actions_list()
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushInfo(
+                    "Qgis MapTips", f"Removed action '{act_data.get('name')}' from '{layer.name()}'."
+                )
+
+    def _on_hub_category_filter_changed(self) -> None:
+        if not hasattr(self, "hub_cat_combo") or not hasattr(self, "action_row_widgets"):
+            return
+        cat = self.hub_cat_combo.currentData() or "ALL"
+        for item in AVAILABLE_ACTIONS:
+            key = item["key"]
+            row_w = self.action_row_widgets.get(key)
+            if row_w is not None:
+                visible = (cat == "ALL") or (item.get("category") == cat)
+                row_w.setVisible(visible)
+
+    def _on_hub_select_core(self) -> None:
+        core_keys = {
+            "google_satellite",
+            "google_streetview",
+            "tkgm_cadastre",
+            "zoom_feature",
+            "copy_clipboard",
+            "export_card_report",
+        }
+        for key, cb in self.action_checkboxes.items():
+            cb.blockSignals(True)
+            cb.setChecked(key in core_keys)
+            cb.blockSignals(False)
+        self._schedule_preview_update()
+
+    def _on_hub_set_visible_checked(self, checked: bool) -> None:
+        for key, cb in self.action_checkboxes.items():
+            row_w = self.action_row_widgets.get(key) if hasattr(self, "action_row_widgets") else None
+            if row_w is None or not row_w.isHidden():
+                cb.blockSignals(True)
+                cb.setChecked(checked)
+                cb.blockSignals(False)
+        self._schedule_preview_update()
+
+    # ──────────────────────────────────────────────────────────────────────────
+    # Action Studio (22 Templates & Customizer) Handlers
+    # ──────────────────────────────────────────────────────────────────────────
+
+    def _populate_studio_template_combo(self, category_filter: str = "ALL") -> None:
+        if not hasattr(self, "studio_tpl_combo"):
+            return
+        prev_key = self.studio_tpl_combo.currentData()
+        self.studio_tpl_combo.blockSignals(True)
+        self.studio_tpl_combo.clear()
+        for act in AVAILABLE_ACTIONS:
+            if category_filter != "ALL" and act.get("category") != category_filter:
+                continue
+            icon_str = act.get("icon", "⚡")
+            badge = "URL" if act.get("type") == "OpenUrl" else "PyQGIS"
+            self.studio_tpl_combo.addItem(f"{icon_str} {act['name']}  [{badge}]", act["key"])
+        self.studio_tpl_combo.blockSignals(False)
+
+        if self.studio_tpl_combo.count() > 0:
+            idx = self.studio_tpl_combo.findData(prev_key) if prev_key else 0
+            if idx < 0:
+                idx = 0
+            self.studio_tpl_combo.setCurrentIndex(idx)
+            self._on_studio_template_selected()
+
+    def _on_studio_category_changed(self) -> None:
+        cat = self.studio_cat_combo.currentData() or "ALL"
+        self._populate_studio_template_combo(cat)
+
+    def _on_studio_template_selected(self) -> None:
+        if not hasattr(self, "studio_tpl_combo"):
+            return
+        key = self.studio_tpl_combo.currentData()
+        if not key:
+            return
+        tpl = get_action_template_by_key(key)
+        if not tpl:
+            return
+        self._load_dict_into_studio_editor(tpl)
+
+    def _load_dict_into_studio_editor(self, act_dict: dict[str, Any]) -> None:
+        self.studio_name_edit.setText(act_dict.get("name", ""))
+        self.studio_short_edit.setText(act_dict.get("short_title", act_dict.get("name", "")[:18]))
+        desc = act_dict.get("description") or f"Action Type: {act_dict.get('type', 'GenericPython')}"
+        self.studio_desc_lbl.setText(f"💡 {desc}")
+
+        act_type = "OpenUrl" if "OpenUrl" in str(act_dict.get("type", "")) else "GenericPython"
+        idx_t = self.studio_type_combo.findData(act_type)
+        if idx_t >= 0:
+            self.studio_type_combo.setCurrentIndex(idx_t)
+
+        scopes = set(act_dict.get("scopes") or ["Canvas", "Feature", "Field", "Layer", "Form"])
+        for sc, cb in self.studio_scope_cbs.items():
+            cb.setChecked(sc in scopes)
+
+        cmd = act_dict.get("command", "")
+        self.studio_code_edit.setPlainText(cmd)
+
+        # Auto-sync Quick Numeric Param spinbox if command has a known numeric parameter
+        m_num = re.search(r"(?:BUFFER_DIST_M|SEARCH_RADIUS_M|POINT_PAD_M)\s*=\s*([0-9]+(?:\.[0-9]+)?)", cmd)
+        if m_num:
+            with contextlib.suppress(ValueError):
+                self.studio_param_spin.setValue(float(m_num.group(1)))
+        else:
+            m_zoom = re.search(r"(?:zoom=|#map=|&z=|&lvl=)([0-9]{1,2})", cmd)
+            if m_zoom:
+                with contextlib.suppress(ValueError):
+                    self.studio_param_spin.setValue(float(m_zoom.group(1)))
+
+        self._update_studio_eval_preview()
+
+    def _open_template_in_studio(self, key: str) -> None:
+        if hasattr(self, "studio_cat_combo"):
+            self.studio_cat_combo.setCurrentIndex(0)
+        if hasattr(self, "studio_tpl_combo"):
+            idx = self.studio_tpl_combo.findData(key)
+            if idx >= 0:
+                self.studio_tpl_combo.setCurrentIndex(idx)
+                self._on_studio_template_selected()
+        if hasattr(self, "tabs"):
+            self.tabs.setCurrentIndex(2)
+
+    def _on_studio_reset_template(self) -> None:
+        self._on_studio_template_selected()
+        if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+            self.iface.messageBar().pushInfo("Action Studio", "Reset editor to template defaults.")
+
+    def _on_studio_new_blank(self) -> None:
+        self.studio_name_edit.setText("Custom Layer Action")
+        self.studio_short_edit.setText("Custom Action")
+        self.studio_desc_lbl.setText(
+            "💡 Write a custom PyQGIS script or URL template using [% \"field\" %] or spatial tokens below."
+        )
+        for cb in self.studio_scope_cbs.values():
+            cb.setChecked(True)
+        act_type = self.studio_type_combo.currentData() or "GenericPython"
+        if act_type == "OpenUrl":
+            self.studio_code_edit.setPlainText("https://example.com/search?id=[% $id %]")
+        else:
+            self.studio_code_edit.setPlainText(
+                "# Custom PyQGIS Action — insert layer fields or spatial tokens above!\n"
+                "from qgis.core import QgsProject, QgsFeatureRequest\n"
+                "from qgis.utils import iface\n"
+                "layer = QgsProject.instance().mapLayer('[% @layer_id %]')\n"
+                "if layer and iface:\n"
+                "    iface.messageBar().pushInfo('Custom Action', 'Clicked Feature ID: [% $id %]')\n"
+            )
+        self._update_studio_eval_preview()
+
+    def _on_edit_selected_layer_action_in_studio(self) -> None:
+        if not hasattr(self, "active_actions_list"):
+            return
+        selected_items = self.active_actions_list.selectedItems()
+        if not selected_items and self.active_actions_list.count() > 0:
+            selected_items = [self.active_actions_list.item(0)]
+        if not selected_items:
+            QMessageBox.information(
+                self,
+                "Action Studio",
+                "No layer action selected in Layer Actions Inventory. Inject or select an action first.",
+            )
+            return
+        act_data = selected_items[0].data(Qt.ItemDataRole.UserRole)
+        if act_data:
+            self._load_dict_into_studio_editor(act_data)
+            self.studio_desc_lbl.setText(
+                f"✏️ Loaded existing layer action '{act_data.get('name')}' for revision. Click 'Inject / Update on Layer' to save changes."
+            )
+            if hasattr(self, "tabs"):
+                self.tabs.setCurrentIndex(2)
+
+    def _on_studio_apply_numeric_param(self) -> None:
+        val = self.studio_param_spin.value()
+        code = self.studio_code_edit.toPlainText()
+        updated = code
+
+        # 1. Replace BUFFER_DIST_M, SEARCH_RADIUS_M, or POINT_PAD_M in Python code
+        if re.search(r"(BUFFER_DIST_M|SEARCH_RADIUS_M|POINT_PAD_M)\s*=\s*[0-9]+(?:\.[0-9]+)?", updated):
+            updated = re.sub(
+                r"(BUFFER_DIST_M|SEARCH_RADIUS_M|POINT_PAD_M)(\s*=\s*)[0-9]+(?:\.[0-9]+)?",
+                rf"\g<1>\g<2>{val:.1f}",
+                updated,
+            )
+            # Also update numbers in Name and Short Title if present (e.g. "50m" -> "200m")
+            int_val = int(round(val))
+            self.studio_name_edit.setText(
+                re.sub(r"\b\d+\s*m\b", f"{int_val}m", self.studio_name_edit.text())
+            )
+            self.studio_short_edit.setText(
+                re.sub(r"\b\d+\s*m\b", f"{int_val}m", self.studio_short_edit.text())
+            )
+        # 2. Replace zoom level in URL templates (zoom=19, #map=18/, &z=19, &lvl=19)
+        elif re.search(r"(zoom=|#map=|&z=|&lvl=)[0-9]{1,2}", updated):
+            z_val = max(1, min(21, int(round(val))))
+            updated = re.sub(r"(zoom=|#map=|&z=|&lvl=)[0-9]{1,2}", rf"\g<1>{z_val}", updated)
+
+        self.studio_code_edit.setPlainText(updated)
+        self._update_studio_eval_preview()
+
+    def _on_studio_insert_field_token(self) -> None:
+        if not hasattr(self, "studio_field_combo"):
+            return
+        fld = self.studio_field_combo.currentData()
+        if not fld:
+            return
+        safe_fld = str(fld).replace('"', '""')
+        token = f'[% "{safe_fld}" %]'
+        self.studio_code_edit.insertPlainText(token)
+        self.studio_code_edit.setFocus()
+
+    def _on_studio_insert_spatial_token(self) -> None:
+        if not hasattr(self, "studio_token_combo"):
+            return
+        token = self.studio_token_combo.currentData()
+        if not token:
+            return
+        self.studio_code_edit.insertPlainText(str(token))
+        self.studio_code_edit.setFocus()
+
+    def _update_studio_eval_preview(self) -> None:
+        if not hasattr(self, "studio_eval_box") or not hasattr(self, "studio_code_edit"):
+            return
+        raw_cmd = self.studio_code_edit.toPlainText()
+        if not raw_cmd.strip():
+            self.studio_eval_box.setPlainText("")
+            return
+
+        layer = self._resolve_target_layer()
+        feat = getattr(self, "_current_sample_feat", None)
+        if is_layer_alive(layer) and isinstance(layer, QgsVectorLayer) and feat:
+            with contextlib.suppress(Exception):
+                ctx = QgsExpressionContext()
+                ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+                ctx.setFeature(feat)
+                evaluated = QgsExpression.replaceExpressionText(raw_cmd, ctx)
+                self.studio_eval_box.setPlainText(evaluated)
+                return
+        self.studio_eval_box.setPlainText(raw_cmd)
+
+    def _on_studio_test_run(self) -> None:
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer):
+            QMessageBox.warning(self, "Action Studio", "Please select a vector layer to test the action on.")
+            return
+
+        feat = getattr(self, "_current_sample_feat", None)
+        if not feat:
+            sel = layer.selectedFeatures()
+            feat = sel[0] if sel else next(layer.getFeatures(), None)
+        if not feat:
+            QMessageBox.warning(self, "Action Studio", "No sample feature available in the active layer.")
+            return
+
+        act_type = self.studio_type_combo.currentData() or "GenericPython"
+        raw_cmd = self.studio_code_edit.toPlainText().strip()
+        act_name = self.studio_name_edit.text().strip() or "Studio Action"
+        if not raw_cmd:
+            return
+
+        if act_type == "OpenUrl":
+            ctx = QgsExpressionContext()
+            ctx.appendScopes(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+            ctx.setFeature(feat)
+            expanded_url = QgsExpression.replaceExpressionText(raw_cmd, ctx).strip()
+            QDesktopServices.openUrl(QUrl(expanded_url))
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushSuccess("Action Studio", f"Opened URL: {expanded_url}")
+            return
+
+        # For GenericPython: check if it matches a template key or inject/update & execute via QgsActionManager
+        tpl_key = self.studio_tpl_combo.currentData() if hasattr(self, "studio_tpl_combo") else ""
+        tpl_def = get_action_template_by_key(tpl_key) if tpl_key else None
+
+        # Check custom buffer or search radius in revised code
+        m_buf = re.search(r"BUFFER_DIST_M\s*=\s*([0-9]+(?:\.[0-9]+)?)", raw_cmd)
+        m_rad = re.search(r"SEARCH_RADIUS_M\s*=\s*([0-9]+(?:\.[0-9]+)?)", raw_cmd)
+
+        if m_buf and "buf_lyr" in raw_cmd:
+            dist_val = float(m_buf.group(1))
+            create_feature_buffer(layer, feat, dist_val, self.iface)
+            return
+        if m_rad and "search_geom" in raw_cmd:
+            from ..core.action_builder import select_nearby_in_layer
+            rad_val = float(m_rad.group(1))
+            select_nearby_in_layer(layer, feat, rad_val, self.iface)
+            return
+        if tpl_def and raw_cmd == tpl_def.get("command", "").strip():
+            if execute_template_or_layer_action(layer, feat, tpl_key, self.iface):
+                return
+
+        # Register/update on layer and execute via native QgsActionManager
+        scopes = [sc for sc, cb in self.studio_scope_cbs.items() if cb.isChecked()]
+        short_lbl = self.studio_short_edit.text().strip() or act_name[:18]
+        inject_or_update_custom_action(layer, act_name, short_lbl, act_type, raw_cmd, scopes, overwrite=True)
+        self._refresh_active_actions_list()
+        for act in get_layer_actions(layer):
+            if act["name"].strip().lower() == act_name.lower():
+                with contextlib.suppress(Exception):
+                    layer.actions().doActionFeature(act["id"], feat)
+                break
+        if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+            self.iface.messageBar().pushSuccess(
+                "Action Studio", f"Tested & updated '{act_name}' on feature ID {feat.id()}."
+            )
+
+    def _on_studio_inject_action(self) -> None:
+        layer = self._resolve_target_layer()
+        if not isinstance(layer, QgsVectorLayer):
+            QMessageBox.warning(self, "Action Studio", "Please select a vector layer to inject this action into.")
+            return
+
+        name = self.studio_name_edit.text().strip()
+        short_lbl = self.studio_short_edit.text().strip() or name[:18]
+        act_type = self.studio_type_combo.currentData() or "GenericPython"
+        cmd = self.studio_code_edit.toPlainText().strip()
+        scopes = [sc for sc, cb in self.studio_scope_cbs.items() if cb.isChecked()]
+
+        if not name or not cmd:
+            QMessageBox.warning(self, "Action Studio", "Please provide both an Action Name and a Code/URL template.")
+            return
+
+        ok = inject_or_update_custom_action(layer, name, short_lbl, act_type, cmd, scopes, overwrite=True)
+        if ok:
+            self._refresh_active_actions_list()
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushSuccess(
+                    "Action Studio",
+                    f"Injected/updated '{name}' on layer '{layer.name()}' ({', '.join(scopes)}).",
+                )
+
+    def _on_studio_export_json(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Actions to JSON", "qgis_custom_actions.json", "JSON Files (*.json)"
+        )
+        if not path:
+            return
+        actions_to_save: list[dict[str, Any]] = []
+        # Include current studio editor action
+        name = self.studio_name_edit.text().strip()
+        cmd = self.studio_code_edit.toPlainText().strip()
+        if name and cmd:
+            actions_to_save.append(
+                {
+                    "name": name,
+                    "short_title": self.studio_short_edit.text().strip() or name[:18],
+                    "type": self.studio_type_combo.currentData() or "GenericPython",
+                    "scopes": [sc for sc, cb in self.studio_scope_cbs.items() if cb.isChecked()],
+                    "command": cmd,
+                }
+            )
+        # Also include any other actions on the active layer
+        layer = self._resolve_target_layer()
+        if isinstance(layer, QgsVectorLayer):
+            existing_names = {a["name"].lower() for a in actions_to_save}
+            for lact in get_layer_actions(layer):
+                if lact["name"].lower() not in existing_names:
+                    actions_to_save.append(lact)
+
+        cnt = export_actions_to_json(actions_to_save, path)
+        if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+            self.iface.messageBar().pushSuccess("Action Studio", f"Exported {cnt} action(s) to {path}")
+
+    def _on_studio_import_json(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Import Actions from JSON", "", "JSON Files (*.json)"
+        )
+        if not path:
+            return
+        imported = import_actions_from_json(path)
+        if not imported:
+            QMessageBox.warning(self, "Action Studio", "No valid actions found in the selected JSON file.")
+            return
+
+        # Load the first action into the Studio editor
+        self._load_dict_into_studio_editor(imported[0])
+
+        # Also inject into active layer if one is selected
+        layer = self._resolve_target_layer()
+        if isinstance(layer, QgsVectorLayer):
+            for act in imported:
+                inject_or_update_custom_action(
+                    layer,
+                    act["name"],
+                    act["short_title"],
+                    act["type"],
+                    act["command"],
+                    act.get("scopes"),
+                    overwrite=True,
+                )
+            self._refresh_active_actions_list()
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
+                self.iface.messageBar().pushSuccess(
+                    "Action Studio", f"Imported {len(imported)} action(s) into '{layer.name()}' and Action Studio."
+                )
+
     def _toggle_canvas_cadastre_tool(self) -> None:
         if self.plugin and hasattr(self.plugin, "toggle_cadastre_tool"):
             self.plugin.toggle_cadastre_tool()
@@ -1926,11 +2721,18 @@ class QgisMapTipsDock(QDockWidget):
             self._zoom_to_sample_feature()
         elif url_str.startswith("action:buffer"):
             self._buffer_sample_feature()
+        elif url_str.startswith("action:tkgm_instant_download"):
+            self._run_sample_instant_tkgm()
         elif url_str.startswith("action:tkgm") or url_str.startswith("action:parsel"):
             self._open_sample_tkgm_web()
         elif url_str.startswith("action:"):
-            key = url_str.split(":", 1)[1]
-            if hasattr(self.iface, "messageBar"):
+            key = url_str.split(":", 1)[1].split("?")[0].strip("/")
+            layer = self._resolve_target_layer()
+            feat = getattr(self, "_current_sample_feat", None)
+            if isinstance(layer, QgsVectorLayer) and feat:
+                if execute_template_or_layer_action(layer, feat, key, self.iface):
+                    return
+            if hasattr(self.iface, "messageBar") and self.iface.messageBar():
                 self.iface.messageBar().pushInfo("Qgis MapTips", f"Action '{key}' clicked in preview.")
         else:
             QDesktopServices.openUrl(url)
@@ -2217,7 +3019,7 @@ class QgisMapTipsDock(QDockWidget):
         cursor_allowed = cursor_cb.isChecked() if cursor_cb is not None else True
 
         # Keep reticle cursor active whenever MapTips is ON (on Designer / Inspect tabs) or when Inspector is active
-        want_cursor = cursor_allowed and (hud_on or (maptips_on and current_tab in (0, 2)))
+        want_cursor = cursor_allowed and (hud_on or (maptips_on and current_tab in (0, 3)))
         self._hud.set_cursor_mode(want_cursor)
 
     def _on_hud_cursor_toggled(self, checked: bool) -> None:

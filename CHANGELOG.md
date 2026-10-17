@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.2.0] - 2026-10-17
+
+### Added
+- **Interactive Action Studio Tab (`🛠️ Action Studio`)**: Full-featured action generator, template browser, and code/URL customizer allowing users to inspect, revise, test-run, and inject custom QGIS actions onto any vector layer.
+- **22 Ready-to-Use QGIS Action Templates across 5 Categories**:
+  - *Web & Street Navigation (8)*: Google Maps (Satellite), Google Street View, Google Driving Directions, OpenStreetMap Inspector, OpenStreetMap iD Web Editor, Yandex Maps & Panorama, Microsoft Bing Aerial View, Mapillary Street Imagery.
+  - *Geometry & Spatial Analysis (6)*: Smart Zoom & Center (Adaptive CRS Padding), Pan & Flash Highlight, Custom-Distance Metric Buffer Layer, Select Nearby Features Within Radius, Extract Feature to Scratch Layer, Ellipsoidal Geometry & Coordinate Audit (Area/Perimeter/Length/Vertices).
+  - *Attribute, Export & Clipboard (4)*: Copy Attributes (Key-Value), Copy Feature as RFC 7946 GeoJSON (WGS84), Copy WKT Geometry & Coordinates, Export Feature Card to Standalone HTML Report.
+  - *Cadastral & Urban Planning (2)*: Open in TKGM Parsel Sorgu Web Portal, Download Official TKGM Parcel Polygon at Feature (Turkey).
+  - *External Portals & Forms (2)*: Open Native QGIS Feature Attribute Form Dialog, Wikimedia GeoHack Coordinate Intelligence Portal.
+- **Dynamic Field & Spatial Token Inserter**: 1-click insertion of active layer attribute fields (`[% "field" %]`) and 12 CRS-safe spatial tokens (WGS84 Lat/Lon, `$id`, `@layer_id`, `$area`, `$perimeter`, `$length`, WKT) at the editor cursor.
+- **Quick Numeric Parameter Adjuster & Live Expression Preview**: 1-click adjustment of buffer distances, proximity search radii, or web map zoom levels, paired with real-time evaluation of `[% ... %]` expressions against the current sample feature.
+- **Portable JSON Action Packs**: Export customized actions to `.json` and import them into any layer or project.
+
 ## [0.1.1] - 2026-09-17
 
 - Upgraded official plugin icon to high-end tactile 3D brand identity (isometric 45°, slim teal pedestal, full bleed transparent canvas).

@@ -231,11 +231,20 @@ class QgisMapTipsPlugin:
             self.dock.raise_()
 
     def _show_about(self) -> None:
+        import configparser
+
+        ver = "0.2.0"
+        with contextlib.suppress(Exception):
+            cp = configparser.ConfigParser()
+            cp.read(str(self.plugin_dir / "metadata.txt"), encoding="utf-8")
+            if cp.has_option("general", "version"):
+                ver = cp.get("general", "version").strip()
+
         QMessageBox.information(
             self.iface.mainWindow() if self.iface else None,
             "About Qgis Advanced Map Tips&Actions",
             "<h3>Qgis Advanced Map Tips&Actions</h3>"
-            "<p><b>Version:</b> 0.1.0<br/>"
+            f"<p><b>Version:</b> {ver}<br/>"
             "<b>Author:</b> Yusuf Eminoğlu<br/>"
             "<b>Repository:</b> <a href='https://gitlab.com/geophilo1/qgis_maptips'>https://gitlab.com/geophilo1/qgis_maptips</a> (GitLab)<br/>"
             "<b>Issues:</b> <a href='https://gitlab.com/geophilo1/qgis_maptips/-/issues'>GitLab Issues</a><br/>"
@@ -243,6 +252,8 @@ class QgisMapTipsPlugin:
             "<p>Design responsive Qt-safe HTML cards, zero-dependency micro-charts "
             "(progress bars, SVG donuts, sparklines), conditional status badges, "
             "and 1-click dynamic web and spatial actions for vector and raster layers in QGIS 3.28+ and QGIS 4.</p>"
+            "<p><b>🛠️ Interactive Action Studio:</b> Browse 22 ready-to-use URL & PyQGIS action templates across 5 categories, "
+            "insert layer fields and spatial expressions, revise parameters/code, test-run on sample features, and export/import JSON action packs.</p>"
             "<hr/>"
             "<p><b>🎯 Instant Canvas Cadastre Picker:</b> 1-click official TKGM MEGSİS parcel query and polygon "
             "download directly from map canvas coordinates without selecting any vector layer (Turkey Only).</p>"

@@ -108,16 +108,16 @@ class QuickManualDialog(QDialog):
         ), "2. Card Design")
 
         tabs.addTab(self._create_stage_tab(
-            "⚡ 1-Click Action Hub",
+            "⚡ 1-Click Action Hub & 🛠️ Action Studio",
             [
-                ("Web Navigation Actions", "1-click injection of dynamic CRS-aware actions: <b>Google Maps (Satellite)</b>, <b>Google Street View</b>, <b>OpenStreetMap</b>, <b>Yandex Maps</b>, and <b>TKGM Parsel Sorgu (Web)</b>."),
-                ("Point-on-Surface Math", "Coordinates are calculated using surface centroids and transformed to EPSG:4326 on the fly, guaranteeing valid pin drops for irregular polygons."),
-                ("Desktop Tools & Spatial Ops", "Inject <b>Copy Attributes to Clipboard</b>, <b>Export HTML Report</b>, <b>Zoom to Feature (Adaptive CRS Padding)</b>, or <b>Buffer Feature (50m Temp Layer)</b>."),
-                ("Cross-Layer Spatial Selectors", "Select all features in a target layer (e.g. parcels, trees, pipes) that spatially intersect the clicked polygon."),
-                ("3 Execution Scenarios", "Trigger actions directly from <b>MapTip card pills</b>, from canvas click using the yellow gear <b>Canvas Action Tool</b>, or right-clicking in <b>Attribute Tables</b>."),
+                ("22 Ready-to-Use Action Templates", "Browse 22 battle-tested templates across 5 categories: <b>Web & Street Navigation</b> (Google Sat, Street View, Directions, OSM, OSM iD Editor, Yandex, Bing Aerial, Mapillary), <b>Geometry & Spatial Analysis</b> (Zoom, Flash & Pan, Custom Buffer, Select Nearby, Extract Feature Layer, Geometry Audit), <b>Attribute & Clipboard</b> (Key-Value, GeoJSON, WKT, HTML Report), <b>Cadastral</b>, and <b>Forms</b>."),
+                ("🛠️ Revise & Customize in Action Studio", "Switch to the <b>🛠️ Action Studio</b> tab (or click <code>✏️</code> next to any template / double-click any active layer action) to inspect and revise its name, short label, scopes, and full Python/URL code."),
+                ("🧩 1-Click Field & Spatial Token Inserter", "Insert any attribute field from your active layer (<code>[% \"field\" %]</code>) or CRS-safe spatial tokens (WGS84 Lat/Lon, <code>$area</code>, <code>$length</code>, WKT) directly at the cursor position."),
+                ("⚡ Quick Parameter Adjuster & Live Preview", "Change buffer distances (e.g. 50m → 250m), proximity search radii, or web map zoom levels in 1 click, preview live evaluated expressions on your sample feature, and click <b>▶ Test Run on Sample</b>."),
+                ("💾 Portable JSON Action Packs", "Export your customized actions to a <code>.json</code> file and import them into any other layer or QGIS project."),
             ],
             "💡 <b>Tip:</b> Layer actions write directly into QGIS's native <code>QgsActionManager</code>, preserving full portability across users and workspaces."
-        ), "3. Actions Hub")
+        ), "3. Action Studio")
 
         tabs.addTab(self._create_stage_tab(
             "🇹🇷 Instant Canvas Cadastre (TKGM)",

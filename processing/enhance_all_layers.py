@@ -22,8 +22,8 @@ class EnhanceAllLayersAlgorithm(QgsProcessingAlgorithm):
     PARAM_ACTIONS = "INCLUDE_ACTIONS"
     PARAM_OVERWRITE = "OVERWRITE_EXISTING"
 
-    PALETTES = ["emerald", "blue", "slate", "crimson", "purple"]
-    PALETTE_NAMES = ["Emerald Studio", "Classic Blue", "Dark Slate", "Crimson Alert", "Modern Purple"]
+    PALETTES = ["emerald", "blue", "slate", "crimson", "purple", "amber"]
+    PALETTE_NAMES = ["Emerald Studio", "Classic Blue", "Dark Slate", "Crimson Alert", "Modern Purple", "Cadastral Amber"]
 
     def name(self) -> str:
         return "enhance_all_layers"

@@ -222,6 +222,55 @@ def test_zoom_and_buffer_logic(iface):
     return _ok("zoom_to_feature and create_feature_buffer execution", z_ok and b_ok and has_buf_layer)
 
 
+def test_action_studio_and_spatial_helpers(iface):
+    from qgis.core import QgsFeature, QgsGeometry, QgsPointXY, QgsProject, QgsVectorLayer
+    from qgis_maptips.core.action_builder import (
+        audit_feature_geometry,
+        copy_feature_as_geojson,
+        copy_feature_wkt_and_coords,
+        extract_feature_to_scratch_layer,
+        flash_pan_to_feature,
+        inject_or_update_custom_action,
+        remove_action_by_id,
+        select_nearby_in_layer,
+    )
+    from qgis_maptips.dialogs.dock import QgisMapTipsDock
+
+    lyr = QgsVectorLayer("Point?crs=EPSG:4326&field=name:string&field=pop:integer", "Studio Test Layer", "memory")
+    f = QgsFeature(lyr.fields())
+    f.setGeometry(QgsGeometry.fromPointXY(QgsPointXY(27.14, 38.42)))
+    f.setAttributes(["Izmir", 4500000])
+    lyr.dataProvider().addFeatures([f])
+    QgsProject.instance().addMapLayer(lyr)
+
+    feat = next(lyr.getFeatures())
+    fp_ok = flash_pan_to_feature(iface.mapCanvas(), lyr, feat, iface)
+    near_cnt = select_nearby_in_layer(lyr, feat, 250.0, iface)
+    ext_lyr = extract_feature_to_scratch_layer(lyr, feat, iface)
+    audit_txt = audit_feature_geometry(lyr, feat, iface)
+    gjson_txt = copy_feature_as_geojson(lyr, feat, iface)
+    wkt_txt = copy_feature_wkt_and_coords(lyr, feat, iface)
+
+    dock = QgisMapTipsDock(iface)
+    has_4_tabs = dock.tabs.count() == 4
+    dock._open_template_in_studio("buffer_feature")
+    dock.studio_param_spin.setValue(180.0)
+    dock._on_studio_apply_numeric_param()
+    has_180 = "180.0" in dock.studio_code_edit.toPlainText()
+
+    inj_ok = inject_or_update_custom_action(
+        lyr, "Custom Buffer 180m", "Buf 180m", "GenericPython", dock.studio_code_edit.toPlainText()
+    )
+    del_ok = remove_action_by_id(lyr, "Custom Buffer 180m")
+
+    dock.unload()
+    dock.close()
+    return _ok(
+        "Action Studio customizer & spatial helpers execution",
+        bool(fp_ok and near_cnt >= 1 and ext_lyr and audit_txt and gjson_txt and wkt_txt and has_4_tabs and has_180 and inj_ok and del_ok),
+    )
+
+
 def run_all(iface):
     print("=" * 60)
     print(" qgis_maptips - lifecycle & core smoke tests")
@@ -235,6 +284,7 @@ def run_all(iface):
         test_action_injection(),
         test_processing_provider(),
         test_zoom_and_buffer_logic(iface),
+        test_action_studio_and_spatial_helpers(iface),
     ]
     passed = sum(1 for r in results if r)
     print("-" * 60)
