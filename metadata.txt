@@ -3,7 +3,7 @@ name=Qgis Advanced Map Tips&Actions
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 description=Advanced Map Tips and Actions Studio for vector and raster layers with Qt-safe HTML cards, inline charts, and 1-click web/spatial actions.
-version=0.2.0
+version=0.2.1
 author=Yusuf Eminoglu
 email=yusuf.eminoglu@deu.edu.tr
 
@@ -33,6 +33,7 @@ hasProcessingProvider=yes
 license=GPL-3
 
 changelog=
+    0.2.1 - Fixed cross-layer counts (they showed the raw expression), HTML escaping of attribute values in cards, the broken no-photo placeholder, the designer sample feature lacking geometry on file layers (zoom, buffer, TKGM and test-run buttons did nothing), the hover HUD repeating its pin footer, nearest-neighbour values, duplicated actions on re-apply, and the batch tool's title-field choice and threading.
     0.2.0 - Added Interactive Action Studio tab with 22 customizable URL and PyQGIS action templates across 5 categories, 1-click layer field and spatial expression token inserter, quick numeric parameter adjuster, live expression evaluator, sample feature test runner, and JSON action pack import/export.
     0.1.1 - Upgraded official plugin icon to high-end tactile 3D brand identity with circular teal pedestal; synchronized documentation, repository and issue tracker endpoints to GeoPhilo and GitLab.
     0.1.0 - Initial release: dockable palette-aware card studio, 5 universal layout archetypes, inline SVG donut and table bar charts, dynamic CRS action builder, and live canvas HUD inspector.

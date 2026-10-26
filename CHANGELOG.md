@@ -1,5 +1,47 @@
 # Changelog
 
+## [0.2.1] - 2026-10-26
+
+### Fixed
+
+- **Cross-layer counts never worked.** "Spatial Intersects (Count)" and
+  "Spatial Contains (Count)" called `overlay_intersects(layer)` without an
+  expression, which returns true/false rather than a list, so the card showed
+  the raw `[% ... %]` expression instead of a number. Counts now come from
+  `overlay_*(layer, $id)`; sum, mean, median, min and max use the field's
+  numeric value.
+- **Attribute values were pasted into the card as HTML.** A name such as
+  `Plot <A> & B` lost `<A>` (read as a tag) and could break the card layout.
+  Titles, subtitles, attribute rows and nearest-neighbour values are now
+  escaped.
+- **The "No Photo Available" placeholder broke the photo card.** Its SVG sat
+  unencoded inside the `src="..."` attribute, so the attribute ended at the
+  first quote and SVG text leaked into the card. The placeholder is now
+  percent-encoded.
+- **The designer's sample feature had no geometry on file layers.** It was
+  fetched without geometry, so on GeoPackage or Shapefile layers the zoom,
+  buffer, TKGM and Action Studio test-run buttons did nothing, and coordinates
+  in the preview's action links were empty.
+- **The hover HUD repeated its "click to pin" footer** inside every nested
+  table of a card (badges, bars, action buttons). It is now added once.
+- The HUD's 5-pixel hover tolerance was wrong when the map and the layer use
+  different CRSs (it only handled a geographic layer on a projected map).
+- An `action:` link with an empty key raised `AttributeError`
+  (`QUrl.Authority()` does not exist).
+- Re-applying actions with replacement requested added a second copy of each
+  action; it now replaces the same-named action, and the dock uses that, so
+  re-applying after a plugin update refreshes stale action commands.
+- The nearest-neighbour metric always read a field called `id`, which is NULL
+  on most layers; it now shows the target layer's name-like field.
+- Batch "Enhance All Project Vector Layers" picked titles by substring, so
+  `fid` (contains "id") or `road` (contains "ad") won over `name`, and it
+  edited project layers from a Processing worker thread. It now chooses a
+  name-like field and runs on the main thread. The HTML report's default card
+  uses the same title choice.
+- Field names containing double quotes, conditional-badge labels with quotes
+  or markup, and unknown comparison operators no longer produce invalid
+  expressions.
+
 ## [0.2.0] - 2026-10-17
 
 ### Added
