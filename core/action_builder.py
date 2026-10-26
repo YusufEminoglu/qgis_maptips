@@ -16,7 +16,7 @@ import contextlib
 import json
 import os
 import tempfile
-from typing import Any, Callable, Optional
+from typing import Any, Optional
 from urllib.parse import parse_qs
 
 try:
@@ -510,7 +510,7 @@ class ActionUrlHandler(QObject):
             QDesktopServices.openUrl(url)
             return
 
-        action_key = url.path() or url.Authority() or url.toString().replace("action:", "").split("?")[0]
+        action_key = url.path() or url.authority() or url.toString().replace("action:", "").split("?")[0]
         action_key = action_key.strip("/")
         query = parse_qs(url.query())
 
@@ -1485,8 +1485,13 @@ def apply_actions_to_layer(
 
     added_count = 0
     for act_def in actions_to_add:
-        if act_def["name"] in existing_names and not clear_existing_plugin_actions:
-            continue
+        if act_def["name"] in existing_names:
+            if not clear_existing_plugin_actions:
+                continue
+            # Replace, not duplicate: drop the old action of the same name first.
+            for existing in list(action_mgr.actions()):
+                if existing.name() == act_def["name"]:
+                    action_mgr.removeAction(existing.id())
 
         act_type = _resolve_qgis_action_type(act_def.get("type", "OpenUrl"))
         scopes = set(act_def.get("scopes") or ["Canvas", "Feature", "Field", "Layer", "Form"])

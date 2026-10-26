@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from qgis.core import (
+    Qgis,
     QgsProcessingAlgorithm,
     QgsProcessingParameterBoolean,
     QgsProcessingParameterEnum,
@@ -12,7 +13,7 @@ from qgis.core import (
 )
 
 from ..core.action_builder import apply_actions_to_layer
-from ..core.template_engine import Archetype, TemplateConfig, compile_maptip_html
+from ..core.template_engine import Archetype, TemplateConfig, choose_title_field, compile_maptip_html
 
 
 class EnhanceAllLayersAlgorithm(QgsProcessingAlgorithm):
@@ -46,6 +47,14 @@ class EnhanceAllLayersAlgorithm(QgsProcessingAlgorithm):
 
     def createInstance(self) -> EnhanceAllLayersAlgorithm:
         return EnhanceAllLayersAlgorithm()
+
+    def flags(self):
+        # The algorithm edits project layers (map tips, actions); that must
+        # happen on the main thread, not in a Processing worker.
+        no_threading = getattr(getattr(Qgis, "ProcessingAlgorithmFlag", None), "NoThreading", None)
+        if no_threading is None:
+            no_threading = QgsProcessingAlgorithm.FlagNoThreading
+        return super().flags() | no_threading
 
     def initAlgorithm(self, config: Dict[str, Any] = None) -> None:
         self.addParameter(
@@ -110,13 +119,10 @@ class EnhanceAllLayersAlgorithm(QgsProcessingAlgorithm):
             if fields.isEmpty():
                 continue
 
-            # Auto-detect title and attribute fields
+            # A name-like field titles the card; substring matching used to
+            # pick "fid" (contains "id") or "road" (contains "ad") over "name".
             field_names = [f.name() for f in fields]
-            title_fld = field_names[0]
-            for fn in field_names:
-                if any(k in fn.lower() for k in ("name", "ad", "title", "id", "label")):
-                    title_fld = fn
-                    break
+            title_fld = choose_title_field(field_names)
 
             # Select up to 6 attribute fields
             attrs = [(fn, fn) for fn in field_names if fn != title_fld][:6]

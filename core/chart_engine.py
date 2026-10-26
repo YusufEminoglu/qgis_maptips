@@ -6,6 +6,7 @@ inside QGIS QTextDocument without external JavaScript, WebKit, or network reques
 from __future__ import annotations
 
 import html
+from urllib.parse import quote
 
 
 def build_progress_bar_table(
@@ -195,4 +196,6 @@ def build_svg_media_placeholder(
         f'<text x="{cx:.1f}" y="{cy + 26:.1f}" font-family="Segoe UI, sans-serif" font-size="10" font-weight="600" fill="{text_color}" text-anchor="middle">No Photo Available</text>'
         f'</svg>'
     )
-    return f'data:image/svg+xml;utf8,{svg}'
+    # Percent-encoded: the URI is placed inside an HTML attribute and an
+    # expression literal, where raw quotes or angle brackets cut it short.
+    return "data:image/svg+xml;utf8," + quote(svg, safe=" /:=,.-")

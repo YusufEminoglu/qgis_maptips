@@ -17,7 +17,7 @@ from qgis.core import (
     QgsProcessingParameterVectorLayer,
 )
 
-from ..core.template_engine import Archetype, TemplateConfig, compile_maptip_html
+from ..core.template_engine import Archetype, TemplateConfig, choose_title_field, compile_maptip_html
 
 
 class ExportLayerCardsReportAlgorithm(QgsProcessingAlgorithm):
@@ -107,8 +107,8 @@ class ExportLayerCardsReportAlgorithm(QgsProcessingAlgorithm):
         if not maptip_template:
             # Auto-compile default card
             fields = [f.name() for f in layer.fields()]
-            title_fld = fields[0] if fields else ""
-            attrs = [(f, f) for f in fields[1:7]]
+            title_fld = choose_title_field(fields)
+            attrs = [(f, f) for f in fields if f != title_fld][:6]
             cfg = TemplateConfig(
                 archetype=Archetype.KPI_CARD,
                 palette_key=palette_key,

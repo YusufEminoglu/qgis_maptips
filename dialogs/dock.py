@@ -75,6 +75,7 @@ from ..core.template_engine import (
     PALETTES,
     Archetype,
     TemplateConfig,
+    choose_title_field,
     compile_maptip_html,
 )
 from ..core.cadastre_tool import (
@@ -562,7 +563,7 @@ class QgisMapTipsDock(QDockWidget):
         self.rel_op_combo = QComboBox()
         self.rel_op_combo.addItem("Spatial Intersects (Count)", ("intersects", "count"))
         self.rel_op_combo.addItem("Spatial Contains (Count)", ("contains", "count"))
-        self.rel_op_combo.addItem("Nearest Neighbor (ID)", ("nearest", "first"))
+        self.rel_op_combo.addItem("Nearest Neighbor (Name)", ("nearest", "first"))
         self.rel_op_combo.currentIndexChanged.connect(self._update_preview)
         form_adv.addRow("Operation:", self.rel_op_combo)
 
@@ -1532,9 +1533,10 @@ class QgisMapTipsDock(QDockWidget):
         self._sample_features = []
         self._sample_feat_index = 0
         if is_layer_alive(self._current_layer) and isinstance(self._current_layer, QgsVectorLayer):
+            # Geometry is needed: the sample feeds coordinates in action links,
+            # cross-layer metrics, and the zoom/buffer/test-run buttons.
             with contextlib.suppress(Exception):
                 req = QgsFeatureRequest()
-                req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
                 req.setLimit(50)
                 for feat in self._current_layer.getFeatures(req):
                     self._sample_features.append(feat)
@@ -1695,12 +1697,20 @@ class QgisMapTipsDock(QDockWidget):
         # Relational metric
         if self.cb_rel_enable.isChecked() and self.rel_layer_combo.currentText():
             op_data = self.rel_op_combo.currentData()
+            target_name = self.rel_layer_combo.currentText()
+            # The nearest-neighbour row shows the target's name-like field; a
+            # hard-coded "id" was NULL on every layer without such a field.
+            target_field = ""
+            for lyr in QgsProject.instance().mapLayersByName(target_name):
+                if isinstance(lyr, QgsVectorLayer):
+                    target_field = choose_title_field(lyr.fields().names())
+                    break
             config.relational_metrics = [
                 {
-                    "target_layer": self.rel_layer_combo.currentText(),
+                    "target_layer": target_name,
                     "op": op_data[0],
                     "aggregate": op_data[1],
-                    "field": "id",
+                    "field": target_field,
                     "label": self.rel_label_edit.text().strip(),
                 }
             ]
@@ -1963,7 +1973,6 @@ class QgisMapTipsDock(QDockWidget):
             else:
                 with contextlib.suppress(Exception):
                     req = QgsFeatureRequest()
-                    req.setFlags(QgsFeatureRequest.Flag.NoGeometry)
                     req.setLimit(1)
                     for feat in layer.getFeatures(req):
                         sample_feature = feat
@@ -2113,6 +2122,9 @@ class QgisMapTipsDock(QDockWidget):
             selected_keys,
             file_field=file_field,
             intersect_target_layer=intersect_tgt,
+            # Same-named actions are replaced, so re-applying after a plugin
+            # update refreshes their commands instead of keeping stale ones.
+            clear_existing_plugin_actions=True,
         )
         self._refresh_active_actions_list()
         self._update_preview()
@@ -2125,7 +2137,7 @@ class QgisMapTipsDock(QDockWidget):
                 layer.setMapTipTemplate(html_text)
 
         msg = (
-            f"{count} actions added to layer '{layer.name()}'.\n"
+            f"{count} actions added or updated on layer '{layer.name()}'.\n"
             f"Active scopes: Canvas, Feature, Field, Layer, Form."
         )
         if hasattr(self.iface, "messageBar"):

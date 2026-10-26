@@ -202,6 +202,53 @@ class TemplateConfig:
             return cls.from_dict(json.load(f))
 
 
+def quote_field(name: str) -> str:
+    """Field reference for a QGIS expression; an already quoted name is kept."""
+    text = str(name or "").strip()
+    if len(text) >= 2 and text.startswith('"') and text.endswith('"'):
+        return text
+    return '"' + text.replace('"', '""') + '"'
+
+
+def quote_literal(text: str) -> str:
+    """String literal for a QGIS expression."""
+    return "'" + str(text).replace("'", "''") + "'"
+
+
+def html_text_expr(expr: str) -> str:
+    """Expression that escapes ``expr``'s text for HTML.
+
+    Attribute values are pasted into the card's HTML as they are, so a value
+    such as "Plot <A> & B" would otherwise be parsed as markup and vanish or
+    break the table.
+    """
+    return (
+        f"replace(replace(replace(to_string({expr}), '&', '&amp;'), '<', '&lt;'), '>', '&gt;')"
+    )
+
+
+TITLE_FIELD_CANDIDATES = (
+    "name", "title", "label", "ad", "adi", "isim", "baslik", "name_en", "name_tr",
+)
+
+
+def choose_title_field(field_names: list[str]) -> str:
+    """Pick the field that best names a feature: a name-like field, else the first non-id field."""
+    names = [str(n) for n in field_names]
+    lowered = {n.casefold(): n for n in names}
+    for candidate in TITLE_FIELD_CANDIDATES:
+        if candidate in lowered:
+            return lowered[candidate]
+    for n in names:
+        if "name" in n.casefold() or n.casefold().endswith("_adi"):
+            return n
+    id_like = {"fid", "id", "objectid", "ogc_fid", "gid", "oid"}
+    for n in names:
+        if n.casefold() not in id_like:
+            return n
+    return names[0] if names else ""
+
+
 def build_safe_attribute_expr(
     field_name: str,
     format_numbers: bool = True,
@@ -209,21 +256,22 @@ def build_safe_attribute_expr(
     null_text: str = "—",
 ) -> str:
     """Return a high-performance QGIS expression evaluating to_real() only once."""
+    null_lit = quote_literal(html.escape(null_text, quote=False))
     if not field_name:
-        return f"'{null_text}'"
-    fld = field_name if (field_name.startswith('"') and field_name.endswith('"')) else f'"{field_name}"'
+        return null_lit
+    fld = quote_field(field_name)
     if not format_numbers:
-        return f"coalesce(nullif(to_string({fld}), ''), '{null_text}')"
+        return f"coalesce(nullif({html_text_expr(fld)}, ''), {null_lit})"
 
     # Evaluates to_real({fld}) exactly once into @v, eliminating redundant AST evaluations
     return (
         f"with_variable('v', try(to_real({fld}), NULL), "
         f"CASE "
-        f"WHEN {fld} IS NULL OR length(trim(to_string({fld}))) = 0 THEN '{null_text}' "
+        f"WHEN {fld} IS NULL OR length(trim(to_string({fld}))) = 0 THEN {null_lit} "
         f"WHEN @v IS NOT NULL THEN ("
         f"CASE WHEN @v = round(@v, 0) THEN format_number(@v, 0) "
         f"ELSE format_number(@v, {decimal_places}) END) "
-        f"ELSE to_string({fld}) END)"
+        f"ELSE {html_text_expr(fld)} END)"
     )
 
 
@@ -240,13 +288,16 @@ def build_conditional_badge_html(rule: dict[str, Any]) -> str:
     except ValueError:
         val_expr = "'" + raw_val.replace("'", "''") + "'"
 
+    if op not in ("=", "!=", "<>", ">", ">=", "<", "<="):
+        op = ">"
     color_true = rule.get("color_true", "#ef4444")
     color_false = rule.get("color_false", "#10b981")
-    safe_lbl_true = rule.get("label_true", "Alert").replace("'", "''")
-    safe_lbl_false = rule.get("label_false", "Normal").replace("'", "''")
+    lbl_true = quote_literal(html.escape(str(rule.get("label_true", "Alert")), quote=False))
+    lbl_false = quote_literal(html.escape(str(rule.get("label_false", "Normal")), quote=False))
+    test = f"({quote_field(fld)} {op} {val_expr})"
 
-    expr_bg = f"CASE WHEN (\"{fld}\" {op} {val_expr}) THEN '{color_true}' ELSE '{color_false}' END"
-    expr_lbl = f"CASE WHEN (\"{fld}\" {op} {val_expr}) THEN '{safe_lbl_true}' ELSE '{safe_lbl_false}' END"
+    expr_bg = f"CASE WHEN {test} THEN {quote_literal(color_true)} ELSE {quote_literal(color_false)} END"
+    expr_lbl = f"CASE WHEN {test} THEN {lbl_true} ELSE {lbl_false} END"
 
     return (
         f'<tr><td colspan="2" align="center" style="padding:4px 8px; border-bottom:1px solid #e2e8f0;">'
@@ -261,27 +312,29 @@ def build_conditional_badge_html(rule: dict[str, Any]) -> str:
 
 def build_relational_metric_row(metric: dict[str, Any], pal: dict[str, str], row_bg: str) -> str:
     """Build a relational/spatial aggregate row linking to another project layer."""
-    target_layer = metric.get("target_layer", "").replace("'", "''")
+    target = quote_literal(metric.get("target_layer", ""))
     op = metric.get("op", "intersects")
-    agg = metric.get("aggregate", "count").lower()
-    raw_fld = metric.get("field", "id").strip('"')
-    fld_expr = f'"{raw_fld}"'
-    label = html.escape(metric.get("label", f"{agg.title()} in {metric.get('target_layer', '')}"))
+    agg = str(metric.get("aggregate", "count")).lower()
+    agg = {"avg": "mean", "average": "mean", "first": "count"}.get(agg, agg) if op != "nearest" else agg
+    if agg not in ("count", "sum", "mean", "median", "min", "max"):
+        agg = "count"
+    raw_fld = str(metric.get("field", "") or "").strip()
+    # An empty field (or one the user typed as $id) reports the target feature id.
+    fld_expr = "$id" if raw_fld in ("", "$id") else quote_field(raw_fld)
+    label = html.escape(metric.get("label") or f"{agg.title()} in {metric.get('target_layer', '')}")
 
-    if op == "intersects":
-        if agg == "count":
-            expr = f"coalesce(array_length(overlay_intersects('{target_layer}')), 0)"
-        else:
-            expr = f"coalesce(array_{agg}(overlay_intersects('{target_layer}', {fld_expr})), 0)"
-    elif op == "contains":
-        if agg == "count":
-            expr = f"coalesce(array_length(overlay_contains('{target_layer}')), 0)"
-        else:
-            expr = f"coalesce(array_{agg}(overlay_contains('{target_layer}', {fld_expr})), 0)"
-    elif op == "nearest":
-        expr = f"coalesce(array_first(overlay_nearest('{target_layer}', {fld_expr})), 'None')"
+    # overlay_*(layer) without an expression returns a boolean, so counting
+    # needs an expression to get one array element per matching feature.
+    overlay = {"intersects": "overlay_intersects", "contains": "overlay_contains"}.get(op, "overlay_intersects")
+    if op == "nearest":
+        expr = (
+            f"coalesce({html_text_expr(f'array_first(overlay_nearest({target}, {fld_expr}))')}, "
+            f"{quote_literal(html.escape(chr(8212)))})"
+        )
+    elif agg == "count":
+        expr = f"coalesce(array_length({overlay}({target}, $id)), 0)"
     else:
-        expr = f"coalesce(array_length(overlay_intersects('{target_layer}')), 0)"
+        expr = f"coalesce(round(array_{agg}({overlay}({target}, to_real({fld_expr}))), 2), 0)"
 
     return (
         f'<tr bgcolor="{row_bg}">'
@@ -397,7 +450,10 @@ def compile_maptip_html(config: TemplateConfig) -> str:
     )
 
     # 1. Header Banner
-    title_expr = f'[% "{config.title_field}" %]' if config.title_field else "Feature Information"
+    title_expr = (
+        f"[% coalesce({html_text_expr(quote_field(config.title_field))}, '') %]"
+        if config.title_field else "Feature Information"
+    )
     lines.append(
         f'<tr><td colspan="2" bgcolor="{pal["header_bg"]}" '
         f'style="color:{pal["header_text"]}; font-size:12px; font-weight:bold; padding:6px 8px;">'
@@ -409,7 +465,7 @@ def compile_maptip_html(config: TemplateConfig) -> str:
         lines.append(
             f'<tr><td colspan="2" bgcolor="{pal["sub_bg"]}" '
             f'style="color:{pal["sub_text"]}; font-size:10px; padding:3px 8px;">'
-            f'[% "{config.subtitle_field}" %]</td></tr>'
+            f"[% coalesce({html_text_expr(quote_field(config.subtitle_field))}, '') %]</td></tr>"
         )
 
     # Conditional Status Badges
@@ -445,7 +501,7 @@ def compile_maptip_html(config: TemplateConfig) -> str:
             null_text=config.null_text,
         )
         bar_html = build_progress_bar_table(
-            val_expr=f'"{config.kpi_field}"',
+            val_expr=quote_field(config.kpi_field),
             max_val_expr=config.progress_max_expr or "100",
             bar_color=pal["accent"],
             bg_color=pal["border"],
@@ -472,10 +528,7 @@ def compile_maptip_html(config: TemplateConfig) -> str:
                 if fld and str(fld).strip()
             ]
         if raw_slices:
-            slices = [
-                (f'"{f}"' if not (str(f).startswith('"') and str(f).endswith('"')) else str(f), lbl, clr)
-                for f, lbl, clr in raw_slices
-            ]
+            slices = [(quote_field(f), lbl, clr) for f, lbl, clr in raw_slices]
             donut_svg = build_svg_donut_data_uri(slices, size=76, stroke_width=16)
             seg_bar = build_segmented_bar_table(slices, height_px=8)
             lines.append(
@@ -506,6 +559,7 @@ def compile_maptip_html(config: TemplateConfig) -> str:
 
     elif config.archetype == Archetype.MEDIA_CARD and config.media_field:
         media_w = w - 24
+        media = quote_field(config.media_field)
         placeholder_uri = build_svg_media_placeholder(
             width=media_w,
             height=120,
@@ -514,22 +568,22 @@ def compile_maptip_html(config: TemplateConfig) -> str:
             text_color=pal["text_secondary"],
         )
         valid_img_cond = (
-            f'(length(trim(coalesce(to_string("{config.media_field}"), \'\'))) > 0 AND '
-            f'("{config.media_field}" LIKE \'http%\' OR "{config.media_field}" LIKE \'data:%\' OR file_exists("{config.media_field}")))'
+            f"(length(trim(coalesce(to_string({media}), ''))) > 0 AND "
+            f"({media} LIKE 'http%' OR {media} LIKE 'data:%' OR file_exists({media})))"
         )
         if config.media_fallback == "hide":
             lines.append(
                 f'[% CASE WHEN {valid_img_cond} THEN '
                 f'\'<tr><td colspan="2" align="center" style="padding:6px; background-color:{pal["row_alt"]}; '
                 f'border-bottom:1px solid {pal["border"]};">\' || '
-                f'\'<img src="\' || "{config.media_field}" || \'" width="{media_w}" '
+                f'\'<img src="\' || replace({media}, \'"\', \'%22\') || \'" width="{media_w}" '
                 f'style="border:1px solid {pal["border"]}; max-height:160px;" />\' || '
                 f'\'</td></tr>\' ELSE \'\' END %]'
             )
         else:
             src_expr = (
                 f'CASE WHEN {valid_img_cond} '
-                f'THEN "{config.media_field}" ELSE \'{placeholder_uri}\' END'
+                f"THEN replace({media}, '\"', '%22') ELSE '{placeholder_uri}' END"
             )
             lines.append(
                 f'<tr><td colspan="2" align="center" style="padding:6px; background-color:{pal["row_alt"]}; '

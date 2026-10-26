@@ -271,6 +271,198 @@ def test_action_studio_and_spatial_helpers(iface):
     )
 
 
+def _parcels_with_trees():
+    from qgis.core import QgsFeature, QgsGeometry, QgsProject, QgsRectangle
+
+    parcels = QgsVectorLayer(
+        "Polygon?crs=EPSG:32635&field=fid:integer&field=name:string&field=score:double&field=photo:string"
+        "&field=res:double&field=com:double",
+        "Card Parcels", "memory")
+    feat = QgsFeature(parcels.fields())
+    feat.setGeometry(QgsGeometry.fromRect(QgsRectangle(500000, 4250000, 500040, 4250030)))
+    feat.setAttributes([7, "Kordon <Plot> & Co", 72.5, "", 60.0, 40.0])
+    parcels.dataProvider().addFeatures([feat])
+    trees = QgsVectorLayer("Point?crs=EPSG:32635&field=label:string", "Card Trees", "memory")
+    for i in range(3):
+        tree = QgsFeature(trees.fields())
+        tree.setGeometry(QgsGeometry.fromWkt(f"Point({500010 + i * 5} 4250010)"))
+        tree.setAttributes([f"tree {i}"])
+        trees.dataProvider().addFeatures([tree])
+    QgsProject.instance().addMapLayers([parcels, trees])
+    return parcels, trees
+
+
+def _evaluate(layer, text):
+    import re
+
+    from qgis.core import QgsExpression, QgsExpressionContext, QgsExpressionContextUtils
+
+    feature = next(layer.getFeatures())
+    ctx = QgsExpressionContext(QgsExpressionContextUtils.globalProjectLayerScopes(layer))
+    ctx.setFeature(feature)
+    errors = []
+    for block in re.findall(r"\[%(.*?)%\]", text, re.S):
+        expr = QgsExpression(block)
+        expr.evaluate(ctx)
+        if expr.hasParserError() or expr.hasEvalError():
+            errors.append((expr.parserErrorString() or expr.evalErrorString(), block[:80]))
+    return QgsExpression.replaceExpressionText(text, ctx), errors
+
+
+def test_cards_evaluate_cleanly():
+    """Every card type evaluates on a real feature; values are escaped, counts are counts."""
+    from qgis.core import QgsProject
+
+    from qgis_maptips.core.template_engine import Archetype, TemplateConfig, compile_maptip_html
+
+    parcels, trees = _parcels_with_trees()
+    common = dict(title_field="name", attribute_fields=[("score", "Score"), ("name", "Name")])
+    configs = [
+        TemplateConfig(archetype=Archetype.KPI_CARD, kpi_field="score",
+                       conditional_rules=[{"field": "score", "op": ">=", "val": "70"}],
+                       relational_metrics=[
+                           {"target_layer": "Card Trees", "op": "intersects", "aggregate": "count"},
+                           {"target_layer": "Card Trees", "op": "nearest", "field": "label"},
+                       ], **common),
+        TemplateConfig(archetype=Archetype.PROGRESS_BAR, kpi_field="score", **common),
+        TemplateConfig(archetype=Archetype.DONUT_CHART, donut_fields=[("res", "Res", "#10b981"),
+                                                                        ("com", "Com", "#3b82f6")], **common),
+        TemplateConfig(archetype=Archetype.SPARKLINE, sparkline_fields=["res", "com"], **common),
+        TemplateConfig(archetype=Archetype.MEDIA_CARD, media_field="photo", **common),
+        TemplateConfig(archetype=Archetype.MEDIA_CARD, media_field="photo", media_fallback="hide", **common),
+        TemplateConfig(archetype=Archetype.CLEAN_TABLE, **common),
+    ]
+    problems = []
+    kpi_html = media_html = ""
+    for cfg in configs:
+        out, errors = _evaluate(parcels, compile_maptip_html(cfg))
+        problems += errors
+        if "[%" in out:
+            problems.append(("unevaluated block", cfg.archetype.value))
+        if cfg.archetype == Archetype.KPI_CARD:
+            kpi_html = out
+        if cfg.archetype == Archetype.MEDIA_CARD and cfg.media_fallback == "placeholder":
+            media_html = out
+    # The value keeps its "<Plot>" as text instead of becoming a tag.
+    escaped = "Kordon &lt;Plot&gt; &amp; Co" in kpi_html
+    # Three trees intersect the parcel; overlay_intersects without an
+    # expression used to return a boolean and the row showed raw [% %] text.
+    counted = ">3</td>" in kpi_html.replace(" ", "")
+    nearest = "tree 0" in kpi_html
+    # The placeholder SVG must stay inside its src attribute.
+    placeholder = 'src="data:image/svg+xml;utf8,%3Csvg' in media_html and 'No Photo Available"' not in media_html
+    QgsProject.instance().removeMapLayers([parcels.id(), trees.id()])
+    return _ok(
+        "every card type evaluates; values escaped, counts and placeholder correct",
+        not problems and escaped and counted and nearest and placeholder,
+        f"problems={problems[:2]} escaped={escaped} counted={counted} nearest={nearest} placeholder={placeholder}",
+    )
+
+
+def test_hud_footer_goes_into_the_outer_table():
+    from qgis_maptips.core.raster_hud import add_footer_row
+    from qgis_maptips.core.template_engine import Archetype, TemplateConfig, compile_maptip_html
+
+    card = compile_maptip_html(TemplateConfig(
+        archetype=Archetype.PROGRESS_BAR, title_field="name", kpi_field="v",
+        conditional_rules=[{"field": "v", "op": ">", "val": "1"}]))
+    nested = card.count("</table>")
+    out = add_footer_row(card, "<tr><td>PIN</td></tr>")
+    once = out.count("PIN") == 1 and out.rstrip().endswith("<tr><td>PIN</td></tr></table>")
+    return _ok("HUD pin footer is added once, to the outer card table", nested > 1 and once,
+               f"nested tables={nested}")
+
+
+def test_dock_sample_has_geometry(iface):
+    from qgis.core import QgsCoordinateTransformContext, QgsProject, QgsVectorFileWriter
+
+    from qgis_maptips.dialogs.dock import QgisMapTipsDock
+
+    # A file layer: the memory provider ignores the NoGeometry request flag,
+    # so only a GeoPackage shows whether the sample comes without geometry.
+    memory, trees = _parcels_with_trees()
+    path = os.path.join(tempfile.mkdtemp(prefix="maptips_sample_"), "parcels.gpkg")
+    options = QgsVectorFileWriter.SaveVectorOptions()
+    options.driverName = "GPKG"
+    QgsVectorFileWriter.writeAsVectorFormatV3(memory, path, QgsCoordinateTransformContext(), options)
+    parcels = QgsVectorLayer(path, "Sample Parcels", "ogr")
+    QgsProject.instance().addMapLayer(parcels)
+    dock = QgisMapTipsDock(iface)
+    dock._refresh_layers()
+    idx = dock.layer_combo.findData(parcels.id())
+    dock.layer_combo.setCurrentIndex(idx)
+    dock._on_target_layer_selected(idx)
+    dock._reload_sample_features()
+    dock._update_preview()
+    sample = getattr(dock, "_current_sample_feat", None)
+    has_geom = bool(sample is not None and sample.hasGeometry())
+    dock.unload()
+    dock.close()
+    QgsProject.instance().removeMapLayers([parcels.id(), memory.id(), trees.id()])
+    # Zoom, buffer, TKGM and the studio test run all act on this feature.
+    return _ok("designer sample feature carries geometry", idx >= 0 and has_geom)
+
+
+def test_reapplying_actions_replaces_instead_of_duplicating():
+    from qgis_maptips.core.action_builder import apply_actions_to_layer
+
+    layer = QgsVectorLayer("Polygon?crs=EPSG:4326&field=id:string", "Reapply", "memory")
+    apply_actions_to_layer(layer, ["google_satellite", "copy_clipboard"])
+    first = sorted(a.name() for a in layer.actions().actions())
+    apply_actions_to_layer(layer, ["google_satellite", "copy_clipboard"], clear_existing_plugin_actions=True)
+    second = sorted(a.name() for a in layer.actions().actions())
+    return _ok("re-applying actions replaces same-named ones", first == second and len(second) == 2,
+               f"{first} -> {second}")
+
+
+def test_action_url_without_path():
+    from qgis.PyQt.QtCore import QUrl
+
+    from qgis_maptips.core.action_builder import ActionUrlHandler
+
+    handler = ActionUrlHandler(None)
+    try:
+        handler.handleUrl(QUrl("action:?layer=missing&id=1"))
+        ok = True
+    except AttributeError as exc:
+        ok = False
+        print("   ", exc)
+    return _ok("action: link with an empty key is ignored, not an AttributeError", ok)
+
+
+def test_batch_enhance_picks_name_and_runs_on_main_thread():
+    from qgis.core import (
+        Qgis,
+        QgsFeature,
+        QgsProcessingAlgorithm,
+        QgsProcessingContext,
+        QgsProcessingFeedback,
+        QgsProject,
+    )
+
+    from qgis_maptips.processing.enhance_all_layers import EnhanceAllLayersAlgorithm
+
+    alg = EnhanceAllLayersAlgorithm()
+    flag = getattr(getattr(Qgis, "ProcessingAlgorithmFlag", None), "NoThreading", None)
+    if flag is None:
+        flag = QgsProcessingAlgorithm.FlagNoThreading
+    main_thread = bool(alg.flags() & flag)
+
+    layer = QgsVectorLayer("Point?crs=EPSG:4326&field=fid:integer&field=width:double&field=name:string",
+                           "Batch", "memory")
+    feature = QgsFeature(layer.fields())
+    feature.setAttributes([1, 2.0, "Alsancak"])
+    layer.dataProvider().addFeatures([feature])
+    QgsProject.instance().addMapLayer(layer)
+    alg.initAlgorithm()
+    alg.processAlgorithm({"PALETTE": 0, "INCLUDE_ACTIONS": False, "OVERWRITE_EXISTING": True},
+                         QgsProcessingContext(), QgsProcessingFeedback())
+    titled_by_name = 'to_string("name")' in layer.mapTipTemplate().split("</tr>")[0]
+    QgsProject.instance().removeMapLayer(layer.id())
+    return _ok("batch enhance titles cards by name and runs on the main thread",
+               main_thread and titled_by_name, f"main_thread={main_thread} name={titled_by_name}")
+
+
 def run_all(iface):
     print("=" * 60)
     print(" qgis_maptips - lifecycle & core smoke tests")
@@ -285,6 +477,12 @@ def run_all(iface):
         test_processing_provider(),
         test_zoom_and_buffer_logic(iface),
         test_action_studio_and_spatial_helpers(iface),
+        test_cards_evaluate_cleanly(),
+        test_hud_footer_goes_into_the_outer_table(),
+        test_dock_sample_has_geometry(iface),
+        test_reapplying_actions_replaces_instead_of_duplicating(),
+        test_action_url_without_path(),
+        test_batch_enhance_picks_name_and_runs_on_main_thread(),
     ]
     passed = sum(1 for r in results if r)
     print("-" * 60)

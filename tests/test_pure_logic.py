@@ -3,6 +3,7 @@ import os
 import re
 import tempfile
 import unittest
+from urllib.parse import unquote
 
 from qgis_maptips.core.chart_engine import (
     build_progress_bar_table,
@@ -18,8 +19,10 @@ from qgis_maptips.core.template_engine import (
     build_conditional_badge_html,
     build_relational_metric_row,
     build_safe_attribute_expr,
+    choose_title_field,
     compile_maptip_html,
     compile_raster_hud_html,
+    quote_field,
 )
 from qgis_maptips.core.action_builder import (
     AVAILABLE_ACTIONS,
@@ -74,8 +77,13 @@ class TestChartEngine(unittest.TestCase):
 
     def test_svg_media_placeholder(self):
         uri = build_svg_media_placeholder(width=280, height=120)
-        self.assertTrue(uri.startswith("data:image/svg+xml;utf8,<svg"))
+        self.assertTrue(uri.startswith("data:image/svg+xml;utf8,%3Csvg"))
         self.assertIn("No Photo Available", uri)
+        # The URI sits inside src="..." and an expression literal: a raw quote
+        # or angle bracket cut it short and leaked SVG text into the card.
+        for char in ('"', "'", "<", ">", "#"):
+            self.assertNotIn(char, uri)
+        self.assertIn("<svg", unquote(uri))
 
 
 class TestTemplateEngine(unittest.TestCase):
@@ -94,8 +102,8 @@ class TestTemplateEngine(unittest.TestCase):
         )
         html = compile_maptip_html(cfg)
         self.assertIn('width="320"', html)
-        self.assertIn('[% "name" %]', html)
-        self.assertIn('[% "category" %]', html)
+        self.assertIn("to_string(\"name\"), '&', '&amp;')", html)
+        self.assertIn("to_string(\"category\"), '&', '&amp;')", html)
         self.assertIn('"score"', html)
         self.assertIn('pts', html)
         self.assertIn('Total Area', html)
@@ -110,7 +118,11 @@ class TestTemplateEngine(unittest.TestCase):
         self.assertIn("'—'", expr)
 
         raw_expr = build_safe_attribute_expr("notes", format_numbers=False, null_text="N/A")
-        self.assertEqual(raw_expr, "coalesce(nullif(to_string(\"notes\"), ''), 'N/A')")
+        self.assertEqual(
+            raw_expr,
+            "coalesce(nullif(replace(replace(replace(to_string(\"notes\"), '&', '&amp;'), '<', '&lt;'), "
+            "'>', '&gt;'), ''), 'N/A')",
+        )
 
     def test_media_card_fallbacks(self):
         cfg_ph = TemplateConfig(archetype=Archetype.MEDIA_CARD, media_field="photo_url", media_fallback="placeholder")
@@ -167,8 +179,51 @@ class TestTemplateEngine(unittest.TestCase):
             "label": "Building Count",
         }
         row_html = build_relational_metric_row(metric, {"text_secondary": "#64748b", "accent": "#10b981", "border": "#ccc"}, "#fff")
-        self.assertIn("array_length(overlay_intersects('buildings'))", row_html)
+        # overlay_intersects(layer) alone returns a boolean; counting needs
+        # an expression so that there is one array element per match.
+        self.assertIn("array_length(overlay_intersects('buildings', $id))", row_html)
+        self.assertNotIn("overlay_intersects('buildings'))", row_html)
         self.assertIn("Building Count", row_html)
+
+    def test_relational_rows_for_every_operation(self):
+        pal = {"text_secondary": "#64748b", "accent": "#10b981", "border": "#ccc"}
+        contains = build_relational_metric_row({"target_layer": "trees", "op": "contains"}, pal, "#fff")
+        self.assertIn("array_length(overlay_contains('trees', $id))", contains)
+        nearest = build_relational_metric_row({"target_layer": "O'Hara", "op": "nearest", "field": ""}, pal, "#fff")
+        self.assertIn("overlay_nearest('O''Hara', $id)", nearest)
+        named = build_relational_metric_row({"target_layer": "t", "op": "nearest", "field": "label"}, pal, "#fff")
+        self.assertIn("overlay_nearest('t', \"label\")", named)
+        summed = build_relational_metric_row(
+            {"target_layer": "t", "op": "intersects", "aggregate": "avg", "field": "pop"}, pal, "#fff"
+        )
+        self.assertIn("array_mean(overlay_intersects('t', to_real(\"pop\")))", summed)
+        bogus = build_relational_metric_row({"target_layer": "t", "aggregate": "drop table"}, pal, "#fff")
+        self.assertIn("array_length(", bogus)
+
+    def test_field_names_are_quoted_and_values_escaped(self):
+        self.assertEqual(quote_field('my "odd" field'), '"my ""odd"" field"')
+        self.assertEqual(quote_field('"already"'), '"already"')
+        cfg = TemplateConfig(archetype=Archetype.KPI_CARD, title_field='na"me', kpi_field="score",
+                             attribute_fields=[("x y", "X & <Y>")], null_text="n'a")
+        html_text = compile_maptip_html(cfg)
+        self.assertIn('to_string("na""me")', html_text)
+        self.assertIn("X &amp; &lt;Y&gt;", html_text)
+        self.assertIn("'n''a'", html_text)
+
+    def test_badge_rejects_unknown_operators_and_escapes_labels(self):
+        badge = build_conditional_badge_html(
+            {"field": "v", "op": "; drop", "val": "3", "label_true": "<b>Hot</b>", "label_false": "it's ok"}
+        )
+        self.assertIn('("v" > 3)', badge)
+        self.assertIn("&lt;b&gt;Hot&lt;/b&gt;", badge)
+        self.assertIn("'it''s ok'", badge)
+
+    def test_choose_title_field_prefers_names_over_ids(self):
+        self.assertEqual(choose_title_field(["fid", "width", "name"]), "name")
+        self.assertEqual(choose_title_field(["fid", "road", "Mahalle_Adi"]), "Mahalle_Adi")
+        self.assertEqual(choose_title_field(["OBJECTID", "zone"]), "zone")
+        self.assertEqual(choose_title_field(["fid"]), "fid")
+        self.assertEqual(choose_title_field([]), "")
 
     def test_preset_serialization_roundtrip(self):
         cfg = TemplateConfig(

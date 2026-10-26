@@ -27,6 +27,7 @@ from qgis.core import (
     QgsFeature,
     QgsFeatureRequest,
     QgsGeometry,
+    QgsPointXY,
     QgsProject,
     QgsRasterLayer,
     QgsVectorLayer,
@@ -130,6 +131,18 @@ def evaluate_vector_feature_maptip(layer: QgsVectorLayer, feat: QgsFeature) -> s
         f'{"".join(rows)}'
         '</table>'
     )
+
+
+def add_footer_row(card_html: str, footer_row: str) -> str:
+    """Insert ``footer_row`` before the card's own closing ``</table>``.
+
+    Cards nest tables (badges, bars, the action ribbon), so the footer goes
+    into the last closing tag only, which belongs to the outer card table.
+    """
+    head, sep, tail = card_html.rpartition("</table>")
+    if not sep:
+        return card_html
+    return f"{head}{footer_row}</table>{tail}"
 
 
 class CanvasHoverHUD(QObject):
@@ -451,9 +464,12 @@ class CanvasHoverHUD(QObject):
                 v_pt = map_pt
 
             pt_geom = QgsGeometry.fromPointXY(v_pt)
+            # Five screen pixels, measured in the layer's own units.
             tol = self.canvas.mapUnitsPerPixel() * 5.0
-            if vlayer_crs.isGeographic() and not canvas_crs.isGeographic():
-                tol = tol / 111320.0
+            if vlayer_crs != canvas_crs and canvas_crs.isValid() and vlayer_crs.isValid():
+                with contextlib.suppress(Exception):
+                    edge = tr_v.transform(QgsPointXY(map_pt.x() + tol, map_pt.y()))
+                    tol = max(1e-12, ((edge.x() - v_pt.x()) ** 2 + (edge.y() - v_pt.y()) ** 2) ** 0.5)
 
             req = (
                 QgsFeatureRequest()
@@ -559,7 +575,7 @@ class CanvasHoverHUD(QObject):
             offset_pos = self._last_global_pos + QPoint(20, 20)
             tolerance_rect = vp.rect() if (vp and hasattr(vp, "rect")) else QRect(0, 0, 10000, 10000)
 
-        display_html = html_content.replace('</table>', f'{footer}</table>')
+        display_html = add_footer_row(html_content, footer)
         QToolTip.showText(offset_pos, display_html, vp, tolerance_rect, 60000)
 
 
