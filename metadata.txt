@@ -30,8 +30,7 @@ icon=icons/icon.png
 experimental=False
 deprecated=False
 hasProcessingProvider=yes
-license=GPL-3
-
+license=GPL-3.0-or-later
 changelog=
     0.2.1 - Fixed cross-layer counts (they showed the raw expression), HTML escaping of attribute values in cards, the broken no-photo placeholder, the designer sample feature lacking geometry on file layers (zoom, buffer, TKGM and test-run buttons did nothing), the hover HUD repeating its pin footer, nearest-neighbour values, duplicated actions on re-apply, and the batch tool's title-field choice and threading.
     0.2.0 - Added Interactive Action Studio tab with 22 customizable URL and PyQGIS action templates across 5 categories, 1-click layer field and spatial expression token inserter, quick numeric parameter adjuster, live expression evaluator, sample feature test runner, and JSON action pack import/export.
