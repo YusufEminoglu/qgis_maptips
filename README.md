@@ -94,7 +94,7 @@ We would like to express our sincere gratitude and special thanks to:
 
 ## Author & License
 
-Developed by **Yusuf Eminoğlu** (`yusuf.eminoglu@deu.edu.tr`).  
+Developed by **Geophilo** (`yusuf.eminoglu@deu.edu.tr`).  
 Repository: [https://gitlab.com/geophilo1/qgis_maptips](https://gitlab.com/geophilo1/qgis_maptips) (GitLab)  
 Issue Tracker: [https://gitlab.com/geophilo1/qgis_maptips/-/issues](https://gitlab.com/geophilo1/qgis_maptips/-/issues)  
 Distributed under the **GNU General Public License v3.0 or later** (GPL-3.0-or-later).

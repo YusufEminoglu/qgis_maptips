@@ -245,7 +245,7 @@ class QgisMapTipsPlugin:
             "About Qgis Advanced Map Tips&Actions",
             "<h3>Qgis Advanced Map Tips&Actions</h3>"
             f"<p><b>Version:</b> {ver}<br/>"
-            "<b>Author:</b> Yusuf Eminoğlu<br/>"
+            "<b>Author:</b> Geophilo<br/>"
             "<b>Repository:</b> <a href='https://gitlab.com/geophilo1/qgis_maptips'>https://gitlab.com/geophilo1/qgis_maptips</a> (GitLab)<br/>"
             "<b>Issues:</b> <a href='https://gitlab.com/geophilo1/qgis_maptips/-/issues'>GitLab Issues</a><br/>"
             "<b>License:</b> GPL-3.0-or-later</p>"

@@ -4,7 +4,7 @@ qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 description=Advanced Map Tips and Actions Studio for vector and raster layers with Qt-safe HTML cards, inline charts, and 1-click web/spatial actions.
 version=0.2.1
-author=Yusuf Eminoglu
+author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 
 about=Interactive HTML MapTips, micro-charts (progress bars, SVG donuts, sparklines), one-click dynamic spatial actions, and live raster HUD inspection for QGIS. Online User Manual & Documentation: https://geophilo.com/qgis_maptips/ | If you find this plugin helpful, please consider starring the repository on GitLab (https://gitlab.com/geophilo1/qgis_maptips)!

@@ -71,4 +71,4 @@ Their innovative work in the geospatial cartography community served as a valuab
 
 ## 6. Implementation & Architecture Integrity
 
-All Python source code, architecture patterns, custom canvas map tools (`InteractiveCadastreTool`), responsive HTML template engines, live raster HUD sampling algorithms, and Processing algorithms in this repository are **clean-room, original implementations** developed by **Yusuf Eminoğlu**.
+All Python source code, architecture patterns, custom canvas map tools (`InteractiveCadastreTool`), responsive HTML template engines, live raster HUD sampling algorithms, and Processing algorithms in this repository are **clean-room, original implementations** developed by **Geophilo**.
