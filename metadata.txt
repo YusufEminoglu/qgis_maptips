@@ -2,29 +2,21 @@
 name=Qgis Advanced Map Tips&Actions
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
-description=Advanced Map Tips and Actions Studio for vector and raster layers with Qt-safe HTML cards, inline charts, and 1-click web/spatial actions.
+description=Design rich map tips with KPI cards, progress bars, donut charts and photos, add one-click web and spatial actions, and inspect raster values live under the cursor, for vector and raster layers.
 version=0.2.1
 author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 
-about=Interactive HTML MapTips, micro-charts (progress bars, SVG donuts, sparklines), one-click dynamic spatial actions, and live raster HUD inspection for QGIS. Online User Manual & Documentation: https://geophilo.com/qgis_maptips/ | If you find this plugin helpful, please consider starring the repository on GitLab (https://gitlab.com/geophilo1/qgis_maptips)!
-    Qgis Advanced Map Tips&Actions is an advanced Map Tips and Actions Studio designed for both vector and raster layers in QGIS 3.28+ and QGIS 4.
-    It bridges the gap between raw attribute tables and modern interactive map exploration by providing a palette-aware, dockable card designer, zero-dependency micro-charts, and a 1-click action library.
-    
-    Key Capabilities:
-    - Palette-Aware Dockable Studio: Automatically adapts to light, dark, and high-contrast QGIS themes.
-    - Universal Layout Archetypes: Modern KPI cards, comparison progress bars, multi-metric inline SVG donut charts, photo/media cards, and raster HUD cards.
-    - Zero-Dependency Inline Charts: Generates bulletproof HTML tables and pure SVG data-URIs that render natively inside Qt QTextDocument without external JavaScript or browser overhead.
-    - 1-Click Action Hub & Interactive Action Studio: 22 ready-to-use URL and PyQGIS action templates across 5 categories (Web Navigation, Spatial & Geometry Ops, Clipboard & GeoJSON/WKT Export, Cadastral & Urban Planning, External Portals & Forms), with live code/URL customizer, field/token inserter, test runner, and JSON import/export.
-    - Live Canvas HUD: Optional non-intrusive hover inspector for raster pixel sampling and multi-layer point inspection with configurable dwell-time debouncing.
-    - Native Persistence: Injected map tips and actions write directly to the layer style and QgsActionManager, remaining fully functional when shared with users who do not have the plugin installed.
+about=Map Tips & Actions turns the plain hover tooltip into an information card. A docked designer builds cards from ready layouts (KPI cards, comparison bars, multi-metric donut charts, photo and media cards, raster readouts) and adapts to light, dark and high-contrast themes. Charts are drawn as SVG inside the card, so they display in QGIS's own tooltip.
+    The action hub adds 22 ready URL and PyQGIS actions in five groups, from opening a location in a web map to copying geometry as GeoJSON or WKT, with an editor, token inserter and test runner. A live canvas readout samples raster pixels and stacked layers as you hover. Tips and actions are stored in the layer style, so colleagues see them even without the plugin.
+    Manual: https://geophilo.com/qgis_maptips/
 
 tracker=https://gitlab.com/geophilo1/qgis_maptips/-/issues
 repository=https://gitlab.com/geophilo1/qgis_maptips
 homepage=https://geophilo.com/qgis_maptips/
 
 category=Vector
-tags=maptip,maptips,actions,html,cards,charts,svg,hud,raster,vector,styling,dashboard,popup,tooltips
+tags=maptip,maptips,actions,html,cards,charts,svg,hud,raster,vector,styling,dashboard,popup,tooltips,map tips,geophilo
 icon=icons/icon.png
 
 experimental=False
