@@ -3,7 +3,7 @@ name=Qgis Advanced Map Tips&Actions
 qgisMinimumVersion=3.28
 qgisMaximumVersion=4.99
 description=Design rich map tips with KPI cards, progress bars, donut charts and photos, add one-click web and spatial actions, and inspect raster values live under the cursor, for vector and raster layers.
-version=0.2.1
+version=0.2.2
 author=Geophilo
 email=yusuf.eminoglu@deu.edu.tr
 
